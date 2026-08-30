@@ -13,14 +13,14 @@ function keyEvent(overrides: Partial<{ key: string; ctrlKey: boolean; altKey: bo
       this.prevented = true;
     },
     stopPropagation(): void {
-      /* בדיקה */
+      /* test stub */
     },
     ...overrides,
   };
 }
 
 describe('parseShortcut + eventMatches', () => {
-  it('מתאים קיצור מלא ודוחה חלקי', () => {
+  it('matches a full shortcut and rejects partial ones', () => {
     const parsed = parseShortcut('Ctrl+Alt+M');
     expect(parsed).not.toBeNull();
     if (!parsed) return;
@@ -30,7 +30,7 @@ describe('parseShortcut + eventMatches', () => {
     expect(eventMatches(parsed, keyEvent({ key: 'm', ctrlKey: true, altKey: true, shiftKey: true }))).toBe(false);
   });
 
-  it('Mod מקבל גם Ctrl וגם Meta', () => {
+  it('Mod accepts both Ctrl and Meta', () => {
     const parsed = parseShortcut('Mod+K');
     expect(parsed).not.toBeNull();
     if (!parsed) return;
@@ -40,7 +40,7 @@ describe('parseShortcut + eventMatches', () => {
     expect(eventMatches(parsed, keyEvent({ key: 'k' }))).toBe(false);
   });
 
-  it('קיצור פסול מחזיר null', () => {
+  it('an invalid shortcut returns null', () => {
     expect(parseShortcut('')).toBeNull();
     expect(parseShortcut('Ctrl+')).toBeNull();
     expect(parseShortcut('A+B')).toBeNull();
@@ -48,7 +48,7 @@ describe('parseShortcut + eventMatches', () => {
 });
 
 describe('bindShortcuts', () => {
-  it('מריץ את הפעולה הראשונה שמתאימה ובולם את האירוע', () => {
+  it('runs the first matching action and swallows the event', () => {
     const captured: { keydown: ((event: unknown) => void) | null } = { keydown: null };
     const target: ShortcutTarget = {
       addEventListener: (_type, listener) => {
@@ -61,14 +61,14 @@ describe('bindShortcuts', () => {
 
     const runs: string[] = [];
     const unbind = bindShortcuts(target, () => [
-      { shortcut: 'Ctrl+1', run: () => void runs.push('ראשון') },
-      { shortcut: 'Ctrl+2', run: () => void runs.push('שני') },
+      { shortcut: 'Ctrl+1', run: () => void runs.push('first') },
+      { shortcut: 'Ctrl+2', run: () => void runs.push('second') },
     ]);
 
     const event = keyEvent({ key: '2', ctrlKey: true });
     captured.keydown?.(event);
 
-    expect(runs).toEqual(['שני']);
+    expect(runs).toEqual(['second']);
     expect(event.prevented).toBe(true);
 
     unbind();

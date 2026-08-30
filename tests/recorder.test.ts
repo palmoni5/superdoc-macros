@@ -3,7 +3,7 @@ import { MacroRecorder, replayMacro } from '../src/recorder/recorder.js';
 import { createFakeHost } from './fake-host.js';
 
 describe('MacroRecorder', () => {
-  it('מקליט פקודות והקלדה, ומלכד הקשות רצופות', async () => {
+  it('records commands and typing, coalescing consecutive keystrokes', async () => {
     const host = createFakeHost();
     const recorder = new MacroRecorder(host);
 
@@ -26,7 +26,7 @@ describe('MacroRecorder', () => {
     ]);
   });
 
-  it('אינו מקליט undo/redo כברירת מחדל', async () => {
+  it('does not record undo/redo by default', async () => {
     const host = createFakeHost();
     const recorder = new MacroRecorder(host);
 
@@ -38,7 +38,7 @@ describe('MacroRecorder', () => {
     expect(steps).toEqual([{ type: 'command', id: 'italic' }]);
   });
 
-  it('cancel זורק את ההקלטה ומפסיק להאזין', async () => {
+  it('cancel discards the recording and stops listening', async () => {
     const host = createFakeHost();
     const recorder = new MacroRecorder(host);
 
@@ -53,7 +53,7 @@ describe('MacroRecorder', () => {
 });
 
 describe('replayMacro', () => {
-  it('מנגן הקלטה על מסמך חדש', async () => {
+  it('replays a recording onto a fresh document', async () => {
     const recordedOn = createFakeHost();
     const recorder = new MacroRecorder(recordedOn);
     recorder.start();
@@ -70,7 +70,7 @@ describe('replayMacro', () => {
     expect(target.executed).toEqual([{ id: 'bold', payload: undefined }]);
   });
 
-  it('עוצר בכשל הראשון כברירת מחדל וממשיך עם stopOnError: false', async () => {
+  it('stops at the first failure by default, continues with stopOnError: false', async () => {
     const host = createFakeHost();
     host.failCommands.add('italic');
     const steps = [

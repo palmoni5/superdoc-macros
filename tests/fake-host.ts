@@ -1,6 +1,11 @@
 /**
- * כפיל `MacroHost` בזיכרון: מסמך כמחרוזת אחת עם סמן, קטלוג פקודות שמתעד
- * הרצות, ושידור אירועי הקלדה ידני (`typeText`) — כאילו המשתמש הקליד.
+ * An in-memory `MacroHost` double: the document as a single string with a
+ * caret, a command catalog that records executions, and manual typing-event
+ * emission (`typeText`) — as if the user typed.
+ *
+ * Sample data across the suite is deliberately Hebrew: RTL documents are a
+ * primary target for this toolkit, and ASCII-only tests would never catch a
+ * regression there.
  */
 import type { MacroHost, MacroOutcome, SelectionSnapshot, TextInputEvent } from '../src/types.js';
 
@@ -8,15 +13,15 @@ export interface FakeHost extends MacroHost {
   text: string;
   cursor: number;
   selection: { from: number; to: number } | null;
-  /** כל הרצת פקודה שעברה דרך המארח. */
+  /** Every command execution that went through the host. */
   executed: Array<{ id: string; payload: unknown }>;
-  /** פקודות שההרצה שלהן תיכשל. */
+  /** Commands whose execution should fail. */
   failCommands: Set<string>;
-  /** מדמה הקלדת משתמש: כותב למסמך וגם משדר אירועי קלט. */
+  /** Simulates user typing: writes to the document and emits input events. */
   typeText(text: string): Promise<void>;
-  /** מדמה Backspace של המשתמש. */
+  /** Simulates the user pressing Backspace. */
   typeBackspace(): Promise<void>;
-  /** מדמה הרצת פקודה מהממשק (למשל כפתור ברצועה) — עוברת דרך אותו מסלול. */
+  /** Simulates a UI-driven command (e.g. a ribbon button) — same path. */
   uiCommand(id: string, payload?: unknown): Promise<MacroOutcome>;
 }
 
@@ -40,11 +45,11 @@ export function createFakeHost(knownCommands: readonly string[] = DEFAULT_COMMAN
       ids: () => knownCommands,
       async execute(id, payload): Promise<MacroOutcome> {
         if (!knownCommands.includes(id)) {
-          return { ok: false, message: `הפקודה ${id} אינה מוכרת למנוע`, reason: 'unknown-command' };
+          return { ok: false, message: `unknown command ${id}`, reason: 'unknown-command' };
         }
         for (const listener of commandListeners) listener(id, payload);
         if (host.failCommands.has(id)) {
-          return { ok: false, message: `הפקודה ${id} נכשלה`, reason: 'test-failure' };
+          return { ok: false, message: `command ${id} failed`, reason: 'test-failure' };
         }
         host.executed.push({ id, payload });
         return { ok: true };
@@ -82,7 +87,7 @@ export function createFakeHost(knownCommands: readonly string[] = DEFAULT_COMMAN
     },
 
     async replaceAll(query, replacement) {
-      if (!query) return { ok: false, replaced: 0, message: 'אין שאילתה' };
+      if (!query) return { ok: false, replaced: 0, message: 'no query' };
       const count = host.text.split(query).length - 1;
       host.text = host.text.split(query).join(replacement);
       return { ok: true, replaced: count };
@@ -108,7 +113,7 @@ export function createFakeHost(knownCommands: readonly string[] = DEFAULT_COMMAN
           emitInput({ kind: 'insert-paragraph' });
           await host.insertText('\n');
         } else {
-          // כמו beforeinput: האירוע משודר ואז התו נכתב.
+          // Like beforeinput: the event is emitted, then the character lands.
           emitInput({ kind: 'insert-text', text: char });
           await host.insertText(char);
         }

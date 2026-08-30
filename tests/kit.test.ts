@@ -9,11 +9,11 @@ function createKit(host = createFakeHost()) {
   return { host, storage, kit };
 }
 
-describe('MacroKit — סקריפטים', () => {
-  it('שומר, מריץ ומוחק סקריפט', async () => {
+describe('MacroKit — scripts', () => {
+  it('saves, runs and removes a script', async () => {
     const { kit, host } = createKit();
 
-    const saved = kit.saveScript({ name: 'ברכה', source: `await api.insertText('בס"ד');` });
+    const saved = kit.saveScript({ name: 'greeting', source: `await api.insertText('בס"ד');` });
     expect(kit.listScripts()).toHaveLength(1);
 
     const result = await kit.runScript(saved.id);
@@ -24,10 +24,10 @@ describe('MacroKit — סקריפטים', () => {
     expect(kit.listScripts()).toHaveLength(0);
   });
 
-  it('המצב נשמר ונטען מחדש מהאחסון', () => {
+  it('state persists and reloads from storage', () => {
     const storage = createMemoryStorage();
     const first = new MacroKit({ host: createFakeHost(), storage, runner: 'eval' });
-    first.saveScript({ name: 'א', source: 'return 1' });
+    first.saveScript({ name: 'a', source: 'return 1' });
     first.saveSnippet({ name: 'בסד', text: 'בס"ד', trigger: 'בסד' });
 
     const second = new MacroKit({ host: createFakeHost(), storage, runner: 'eval' });
@@ -36,14 +36,14 @@ describe('MacroKit — סקריפטים', () => {
   });
 });
 
-describe('MacroKit — הקלטה וניגון', () => {
-  it('מקליט דרך המארח, שומר ומנגן', async () => {
+describe('MacroKit — recording and replay', () => {
+  it('records through the host, saves and replays', async () => {
     const { kit, host } = createKit();
 
     kit.startRecording();
     await host.uiCommand('bold');
     await host.typeText('שלום');
-    const recording = kit.stopRecording('פתיח');
+    const recording = kit.stopRecording('intro');
 
     expect(recording).not.toBeNull();
     expect(kit.listRecordings()).toHaveLength(1);
@@ -58,43 +58,43 @@ describe('MacroKit — הקלטה וניגון', () => {
     expect(host.executed).toEqual([{ id: 'bold', payload: undefined }]);
   });
 
-  it('updateRecording משנה שם וקיצור, ומחיקת קיצור מסירה את השדה', async () => {
+  it('updateRecording renames and clears shortcuts', async () => {
     const { kit, host } = createKit();
     kit.startRecording();
     await host.typeText('א');
-    const recording = kit.stopRecording('זמני', 'Ctrl+Alt+9')!;
+    const recording = kit.stopRecording('temporary', 'Ctrl+Alt+9')!;
 
-    const renamed = kit.updateRecording({ id: recording.id, name: 'קבוע', shortcut: '' });
+    const renamed = kit.updateRecording({ id: recording.id, name: 'permanent', shortcut: '' });
 
-    expect(renamed?.name).toBe('קבוע');
+    expect(renamed?.name).toBe('permanent');
     expect(renamed?.shortcut).toBeUndefined();
-    expect(kit.updateRecording({ id: 'אין-כזה', name: 'x' })).toBeNull();
+    expect(kit.updateRecording({ id: 'no-such-id', name: 'x' })).toBeNull();
   });
 
-  it('הקלטה ריקה אינה נשמרת', () => {
+  it('an empty recording is not saved', () => {
     const { kit } = createKit();
     kit.startRecording();
-    expect(kit.stopRecording('ריק')).toBeNull();
+    expect(kit.stopRecording('empty')).toBeNull();
     expect(kit.listRecordings()).toHaveLength(0);
   });
 
-  it('אין ריצת מאקרו בזמן הקלטה', async () => {
+  it('no macro runs while recording', async () => {
     const { kit } = createKit();
-    const saved = kit.saveScript({ name: 'א', source: `await api.insertText('x');` });
+    const saved = kit.saveScript({ name: 'a', source: `await api.insertText('x');` });
 
     kit.startRecording();
     const result = await kit.runScript(saved.id);
     kit.cancelRecording();
 
     expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.message).toContain('בזמן הקלטה');
+    if (!result.ok) expect(result.message).toContain('while recording');
   });
 });
 
-describe('MacroKit — קטעים וייבוא/ייצוא', () => {
-  it('מרחיב קטע שמור עם משתנים', async () => {
+describe('MacroKit — snippets and import/export', () => {
+  it('expands a saved snippet with variables', async () => {
     const { kit, host } = createKit();
-    const snippet = kit.saveSnippet({ name: 'חתימה', text: 'בברכה, {{שם}}' });
+    const snippet = kit.saveSnippet({ name: 'signature', text: 'בברכה, {{שם}}' });
 
     const result = await kit.expandSnippet(snippet.id, { variables: { שם: 'ראובן' } });
 
@@ -102,9 +102,9 @@ describe('MacroKit — קטעים וייבוא/ייצוא', () => {
     expect(host.text).toBe('בברכה, ראובן');
   });
 
-  it('ייצוא ואז ייבוא משחזרים את המצב', () => {
+  it('export then import restores the state', () => {
     const { kit } = createKit();
-    kit.saveScript({ name: 'א', source: 'return 1', shortcut: 'Ctrl+1' });
+    kit.saveScript({ name: 'a', source: 'return 1', shortcut: 'Ctrl+1' });
     kit.saveSnippet({ name: 'בסד', text: 'בס"ד', trigger: 'בסד' });
     const exported = kit.exportState();
 
@@ -116,17 +116,17 @@ describe('MacroKit — קטעים וייבוא/ייצוא', () => {
     expect(fresh.listSnippets()).toHaveLength(1);
   });
 
-  it('ייבוא של JSON פגום נכשל סגור', () => {
+  it('importing broken JSON fails closed', () => {
     const { kit } = createKit();
-    expect(kit.importState('לא json').ok).toBe(false);
+    expect(kit.importState('not json').ok).toBe(false);
     expect(kit.importState('{"version":99}').ok).toBe(false);
   });
 });
 
-describe('MacroKit — קיצורי מקלדת', () => {
-  it('קיצור של סקריפט שמור מריץ אותו', async () => {
+describe('MacroKit — keyboard shortcuts', () => {
+  it('a saved script shortcut runs it', async () => {
     const { kit, host } = createKit();
-    kit.saveScript({ name: 'א', source: `await api.insertText('קיצור');`, shortcut: 'Ctrl+Alt+1' });
+    kit.saveScript({ name: 'a', source: `await api.insertText('קיצור');`, shortcut: 'Ctrl+Alt+1' });
 
     let keydown: ((event: unknown) => void) | null = null;
     kit.attachShortcuts({

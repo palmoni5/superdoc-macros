@@ -1,27 +1,30 @@
 /**
- * השלמה אוטומטית (AutoText): הקלדת מילת ההפעלה של קטע ואחריה רווח מחליפה את
- * המילה בתוכן הקטע.
+ * Auto-text: typing a snippet's trigger word followed by a space replaces
+ * the word with the snippet's content.
  *
- * איך זה עובד: נשמר חוצץ קטן של התווים שהוקלדו ברצף הנוכחי (מתוך אירועי
- * `TextInputEvent` של המארח). כשמוקלד תו הרחבה (רווח כברירת מחדל) והמילה
- * שלפניו היא trigger של קטע — המילה ותו ההרחבה נמחקים לאחור, והתוכן המורחב
- * מוכנס במקומם עם תו ההרחבה בסופו.
+ * How it works: a small buffer keeps the characters typed in the current run
+ * (from the host's `TextInputEvent`s). When an expansion character (space by
+ * default) is typed and the word before it is some snippet's trigger, the
+ * word and the expansion character are deleted backwards and the rendered
+ * content is inserted in their place, with the expansion character restored
+ * at the end.
  *
- * החוצץ מתאפס על פסקה חדשה, על מחיקה קדימה ועל פקודה שרצה באמצע — כל דבר
- * שמנתק את הרצף בין מה שהוקלד ובין מה שנמצא בפועל לפני הסמן. עדיף פספוס
- * הרחבה על הרחבה שמוחקת טקסט לא נכון.
+ * The buffer resets on a new paragraph, on forward deletion and on a command
+ * running mid-typing — anything that breaks the correspondence between what
+ * was typed and what actually sits before the caret. A missed expansion is
+ * better than an expansion that deletes the wrong text.
  */
 import type { MacroHost, Snippet, TextInputEvent } from '../types.js';
 import { renderSnippet, usesSelection } from './snippets.js';
 
 export interface AutoTextOptions {
-  /** תווי ההרחבה. ברירת מחדל: רווח בלבד. */
+  /** The expansion characters. Default: space only. */
   expandOn?: readonly string[];
-  /** גודל החוצץ. מילת הפעלה ארוכה מזה לא תזוהה. */
+  /** Buffer size. A trigger word longer than this will not be recognized. */
   bufferSize?: number;
-  /** נקראת אחרי הרחבה מוצלחת. */
+  /** Called after a successful expansion. */
   onExpand?: (snippet: Snippet) => void;
-  /** נקראת כשהרחבה נכשלה (למשל מסמך לקריאה בלבד). */
+  /** Called when an expansion failed (e.g. a read-only document). */
   onError?: (message: string) => void;
 }
 
@@ -57,7 +60,7 @@ export class AutoText {
     if (this.disposeInput) return () => this.detach();
     this.buffer = '';
     this.disposeInput = this.host.onTextInput((event) => void this.handleInput(event));
-    // פקודה באמצע הקלדה (עיצוב, הדבקה) מנתקת את הקשר בין החוצץ למסמך.
+    // A command mid-typing (formatting, paste) breaks the buffer's link to the document.
     this.disposeCommand = this.host.onCommand(() => {
       if (!this.busy) this.buffer = '';
     });
@@ -73,7 +76,7 @@ export class AutoText {
   }
 
   private async handleInput(event: TextInputEvent): Promise<void> {
-    // קלט שנוצר בזמן שההרחבה עצמה כותבת — לא חלק מההקלדה של המשתמש.
+    // Input generated while the expansion itself is writing — not the user's typing.
     if (this.busy) return;
 
     switch (event.kind) {
@@ -107,15 +110,17 @@ export class AutoText {
   private async expand(snippet: Snippet, trigger: string, expandChar: string): Promise<void> {
     this.busy = true;
     try {
-      // אירוע הקלט (beforeinput) נורה לפני שהתו נכתב למסמך. הדחייה לתור
-      // המשימות מבטיחה שתו ההרחבה כבר בפנים לפני שמוחקים אותו יחד עם ה-trigger.
+      // The input event (beforeinput) fires before the character is written
+      // to the document. Deferring to the task queue guarantees the expansion
+      // character is already in before it is deleted along with the trigger.
       await new Promise<void>((resolve) => setTimeout(resolve, 0));
       const selectionText = usesSelection(snippet.text)
         ? (await this.host.getSelection({ includeText: true })).text
         : undefined;
       const rendered = renderSnippet(snippet.text, { selectionText });
 
-      // תו ההרחבה כבר נכתב למסמך כשמגיעים לכאן, ולכן הוא נכלל במחיקה ומוחזר בסוף.
+      // The expansion character is already in the document by now, so it is
+      // included in the deletion and restored at the end.
       const deleted = await this.host.deleteBackward(trigger.length + 1);
       if (!deleted.ok) {
         this.onError?.(deleted.message);
@@ -133,7 +138,7 @@ export class AutoText {
   }
 }
 
-/** המילה שבסוף החוצץ — רצף שאינו רווח לבן. */
+/** The word at the end of the buffer — a run of non-whitespace. */
 function trailingWord(buffer: string): string | null {
   const match = /(\S+)$/u.exec(buffer);
   return match?.[1] ?? null;

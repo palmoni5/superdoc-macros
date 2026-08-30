@@ -1,30 +1,31 @@
 /**
- * החוזים המשותפים של הערכה.
+ * Shared contracts.
  *
- * `MacroHost` הוא נקודת החיבור היחידה לעורך: כל שלוש היכולות (סקריפטים,
- * מקליט, קטעי טקסט) עובדות מולו ולא מול SuperDoc ישירות. כך אפשר לבדוק את
- * הערכה עם כפיל בזיכרון, וכך מארח אחר (גרסת מנוע אחרת, עורך אחר) מתחבר
- * במימוש אחד של הממשק הזה.
+ * `MacroHost` is the single connection point to the editor: all three
+ * capabilities (scripts, recorder, snippets) work against it rather than
+ * against SuperDoc directly. That is what makes the toolkit testable with an
+ * in-memory double, and what lets another host (a different engine version,
+ * a different editor) plug in with one implementation of this interface.
  */
 
-/** תוצאת פעולה. אותה צורה כמו `CommandOutcome` של otzaria-word-editor. */
+/** Result of an operation. Same shape as otzaria-word-editor's `CommandOutcome`. */
 export type MacroOutcome = { ok: true } | { ok: false; message: string; reason?: string };
 
-/** תצלום הבחירה במסמך ברגע הקריאה. */
+/** Snapshot of the document selection at the moment of the call. */
 export interface SelectionSnapshot {
-  /** הטקסט המסומן. `''` כשאין בחירה או כשלא התבקש. */
+  /** The selected text. `''` when there is no selection or it was not requested. */
   text: string;
-  /** האם יש טווח מסומן ולא רק סמן. */
+  /** Whether a range is selected, as opposed to a caret only. */
   hasRange: boolean;
-  /** מזהה הפסקה שהבחירה מתחילה בה, או `null`. */
+  /** Id of the block the selection starts in, or `null`. */
   blockId: string | null;
-  /** היעד שפעולות כתיבה (`insert`) צורכות. אטום — נמסר חזרה למנוע כמו שהוא. */
+  /** The target that write operations (`insert`) consume. Opaque — handed back to the engine as-is. */
   selectionTarget: unknown | null;
-  /** האם הבחירה ריקה (סמן בלבד). */
+  /** Whether the selection is empty (caret only). */
   empty: boolean;
 }
 
-/** אירוע הקלדה שהמארח מדווח למקליט ולהשלמה האוטומטית. */
+/** A typing event the host reports to the recorder and to auto-text. */
 export type TextInputEvent =
   | { kind: 'insert-text'; text: string }
   | { kind: 'insert-paragraph' }
@@ -32,38 +33,38 @@ export type TextInputEvent =
   | { kind: 'delete-forward' };
 
 /**
- * מה שהערכה צריכה מהעורך. מימוש ל-SuperDoc v2 נמצא ב-`createSuperdocHost`;
- * לבדיקות יש כפיל בזיכרון.
+ * What the toolkit needs from the editor. The SuperDoc v2 implementation is
+ * `createSuperdocHost`; tests use an in-memory double.
  */
 export interface MacroHost {
   commands: {
-    /** האם המנוע מכיר את הפקודה. */
+    /** Whether the engine recognizes the command. */
     has(id: string): boolean;
-    /** מריצה פקודה מהקטלוג של המנוע ומחזירה תוצאה מנורמלת. */
+    /** Runs a command from the engine's catalog and returns a normalized outcome. */
     execute(id: string, payload?: unknown): Promise<MacroOutcome>;
-    /** מזהי הפקודות המוכרות, אם המארח יודע למנות אותם. */
+    /** The known command ids, when the host can enumerate them. */
     ids(): readonly string[];
   };
-  /** מכניסה טקסט במיקום הסמן (או בסוף המסמך כשאין סמן). */
+  /** Inserts text at the caret (or at the end of the document when there is no caret). */
   insertText(text: string): Promise<MacroOutcome>;
-  /** מוחקת תווים לאחור מהסמן. */
+  /** Deletes characters backwards from the caret. */
   deleteBackward(count: number): Promise<MacroOutcome>;
-  /** תצלום הבחירה הנוכחית. לעולם לא זורקת. */
+  /** Snapshot of the current selection. Never throws. */
   getSelection(options?: { includeText?: boolean }): Promise<SelectionSnapshot>;
-  /** מחליפה את כל המופעים של `query` ב-`replacement`. מחזירה כמה הוחלפו. */
+  /** Replaces every occurrence of `query` with `replacement`. Returns how many were replaced. */
   replaceAll(
     query: string,
     replacement: string,
   ): Promise<{ ok: boolean; replaced: number; message?: string }>;
-  /** הטקסט המלא של גוף המסמך. `''` כשאינו זמין. */
+  /** The full text of the document body. `''` when unavailable. */
   getDocumentText(): Promise<string>;
-  /** מאזינה לכל פקודה שהמנוע מריץ (מכל מקור). מחזירה פונקציית ביטול. */
+  /** Observes every command the engine runs (from any source). Returns a dispose function. */
   onCommand(listener: (id: string, payload: unknown) => void): () => void;
-  /** מאזינה להקלדה במסמך. מחזירה פונקציית ביטול. */
+  /** Observes typing in the document. Returns a dispose function. */
   onTextInput(listener: (event: TextInputEvent) => void): () => void;
 }
 
-/** צעד אחד במאקרו מוקלט. JSON-serializable במלואו. */
+/** One step of a recorded macro. Fully JSON-serializable. */
 export type MacroStep =
   | { type: 'command'; id: string; payload?: unknown }
   | { type: 'insert-text'; text: string }
@@ -71,7 +72,7 @@ export type MacroStep =
   | { type: 'delete-backward'; count: number }
   | { type: 'delete-forward'; count: number };
 
-/** מאקרו מוקלט, כפי שהוא נשמר ומיובא/מיוצא. */
+/** A recorded macro, as persisted and imported/exported. */
 export interface RecordedMacro {
   version: 1;
   id: string;
@@ -82,7 +83,7 @@ export interface RecordedMacro {
   steps: MacroStep[];
 }
 
-/** מאקרו כתוב — סקריפט JavaScript שרץ מול ה-API של הערכה. */
+/** A written macro — a JavaScript script that runs against the toolkit's API. */
 export interface SavedScript {
   id: string;
   name: string;
@@ -90,14 +91,14 @@ export interface SavedScript {
   shortcut?: string;
 }
 
-/** קטע טקסט (Snippet / AutoText). */
+/** A text snippet (AutoText building block). */
 export interface Snippet {
   id: string;
   name: string;
-  /** תוכן הקטע. תומך במשתני `{{...}}` — ראו `renderSnippet`. */
+  /** Snippet content. Supports `{{...}}` variables — see `renderSnippet`. */
   text: string;
-  /** מילת הפעלה להשלמה אוטומטית: הקלדת המילה ואחריה רווח מחליפה אותה בתוכן. */
+  /** Auto-text trigger word: typing the word followed by a space replaces it with the content. */
   trigger?: string;
-  /** קיצור מקלדת, למשל `Ctrl+Alt+1`. */
+  /** Keyboard shortcut, e.g. `Ctrl+Alt+1`. */
   shortcut?: string;
 }

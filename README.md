@@ -1,61 +1,54 @@
 # superdoc-macros
 
-ערכת מאקרו לעורכים מבוססי **SuperDoc v2**. נכתבה במקור עבור [otzaria-word-editor](https://github.com/Y-PLONI/otzaria-word-editor), אך כללית לחלוטין: אין תלות בו ואף לא בחבילת superdoc עצמה (החיבור למנוע מבני, דרך המשטחים הציבוריים שלו), והליבה עובדת מול כל עורך שמממש ממשק `MacroHost` קטן.
+A macro toolkit for **SuperDoc v2**-based editors. Originally built for [otzaria-word-editor](https://github.com/Y-PLONI/otzaria-word-editor), but fully generic: it has no dependency on that project — nor on the superdoc package itself (the engine is consumed structurally, through its public surfaces), and the core works against any editor that implements a small `MacroHost` interface.
 
-שלוש יכולות, בדומה למאקרו של Word:
+Three capabilities, in the spirit of Word macros:
 
-| יכולת | מה זה נותן |
+| Capability | What it gives you |
 | --- | --- |
-| **סקריפטים** | מאקרו כתובים ב-JavaScript שרצים בארגז חול (iframe מבודד) מול API מצומצם ובטוח של המסמך |
-| **מקליט מאקרו** | "הקלט → עשה פעולות → עצור → נגן" — מקליט פקודות והקלדה, כמו המקליט של Word |
-| **קטעי טקסט (Snippets)** | תבניות עם משתנים (`{{date}}`, `{{selection}}`…), קיצורי מקלדת, והשלמה אוטומטית בהקלדה (הקלדת `בסד` + רווח ← `בס"ד`) |
+| **Scripted macros** | User-written JavaScript macros that run in a real sandbox (an isolated iframe) against a small, safe document API |
+| **Macro recorder** | "Record → work normally → stop → replay" — records commands and typing, like Word's recorder |
+| **Snippets (AutoText)** | Templates with variables (`{{date}}`, `{{selection}}`…), keyboard shortcuts, and auto-expansion while typing (type a trigger word + space) |
 
-בנוסף: שמירה מתמשכת (localStorage או אחסון מותאם), ייבוא/ייצוא JSON, וקישור קיצורי מקלדת.
+Plus: persistence (localStorage or custom storage), JSON import/export, keyboard shortcut binding, and localizable runtime messages (English by default, Hebrew locale included).
 
-> **הערה על VBA:** החבילה אינה מריצה מאקרו VBA מתוך קובצי `.docm` — אין מנוע VBA בדפדפן. היא נותנת מערכת מאקרו מקבילה, מבוססת JavaScript, שמתאימה לעורך רץ-בדפדפן.
+> **A note on VBA:** the toolkit does not execute VBA macros from `.docm` files — there is no VBA engine in the browser. It provides a parallel, JavaScript-based macro system suited to a browser-hosted editor.
 
-## התקנה
+## Installation
 
 ```bash
 npm install superdoc-macros
 ```
 
-או ישירות מגיטהאב (עד הפרסום ב-npm):
-
-```bash
-npm install github:palmoni5/superdoc-macros
-```
-
-## התחלה מהירה (עם SuperDoc)
+## Quick start (with SuperDoc)
 
 ```ts
 import { MacroKit, createSuperdocHost } from 'superdoc-macros';
 
-// superdoc — מופע SuperDoc מוכן (אחרי onReady); container — האלמנט שהמסמך מרונדר בו.
+// superdoc — a ready SuperDoc instance (after onReady); container — the element the document renders in.
 const host = createSuperdocHost({ superdoc, container });
 const kit = new MacroKit({ host });
 
-// קיצורי מקלדת לכל מה ששמור, והשלמה אוטומטית:
+// Keyboard shortcuts for everything saved, and auto-text:
 const unbindKeys = kit.attachShortcuts(container);
 const disableAutoText = kit.enableAutoText();
 
-// בהחלפת מסמך / פירוק:
+// On document swap / teardown:
 unbindKeys();
 disableAutoText();
 host.dispose();
 ```
 
-## 1. מאקרו כתובים (סקריפטים)
+## 1. Scripted macros
 
-סקריפט מקבל אובייקט `api` וכל המתודות שלו א-סינכרוניות:
+A script receives an `api` object; every method is async:
 
 ```ts
 kit.saveScript({
-  name: 'כותרת דבר תורה',
+  name: 'Heading helper',
   shortcut: 'Ctrl+Alt+D',
   source: `
     await api.bold();
-    await api.insertText('בעניין ');
     const selected = await api.getSelectionText();
     if (selected) await api.insertText(selected);
     await api.bold();
@@ -67,91 +60,101 @@ const result = await kit.runScript(kit.listScripts()[0].id);
 if (!result.ok) console.warn(result.message);
 ```
 
-### ה-API שסקריפט מקבל
+### The script API
 
-| מתודה | תיאור |
+| Method | Description |
 | --- | --- |
-| `api.command(id, payload?)` | כל פקודה מקטלוג SuperDoc (`'text-align'`, `'font-size'`…). מחזירה `{ok}` ואינה זורקת |
-| `api.hasCommand(id)` / `api.commandIds()` | בירור יכולות |
-| `api.insertText(text)` / `api.insertParagraph()` | הכנסה במיקום הסמן |
-| `api.deleteBackward(count?)` | מחיקה לאחור |
-| `api.getSelection()` / `api.getSelectionText()` | הבחירה הנוכחית |
-| `api.getDocumentText()` | הטקסט המלא |
-| `api.replaceAll(find, replace)` | החלפה גורפת; מחזירה כמה הוחלפו |
-| `api.bold()` / `italic()` / `underline()` / `bulletList()` / `directionRtl()` … | סוכר לפקודות נפוצות — זורקות בכשל, כדי שהסקריפט ייעצר |
-| `api.log(...)` | יומן ריצה (מגיע ל-`onLog` של ה-Kit) |
+| `api.command(id, payload?)` | Any command from the SuperDoc catalog (`'text-align'`, `'font-size'`…). Returns `{ok}`, never throws |
+| `api.hasCommand(id)` / `api.commandIds()` | Capability discovery |
+| `api.insertText(text)` / `api.insertParagraph()` | Insert at the caret |
+| `api.deleteBackward(count?)` | Delete backwards |
+| `api.getSelection()` / `api.getSelectionText()` | The current selection |
+| `api.getDocumentText()` | The full document text |
+| `api.replaceAll(find, replace)` | Replace everywhere; returns the count |
+| `api.bold()` / `italic()` / `underline()` / `bulletList()` / `directionRtl()` … | Sugar for common commands — these throw on failure, so the script stops |
+| `api.log(...)` | Run log (delivered to the kit's `onLog`) |
 
-### אבטחה
+### Security
 
-ברירת המחדל היא **ארגז חול אמיתי**: הסקריפט רץ ב-iframe עם `sandbox="allow-scripts"` בלבד — origin אטום, בלי גישה ל-DOM של האפליקציה, ל-localStorage, ל-cookies או לרשת עם אישורי המשתמש. הדרך היחידה שלו לגעת במסמך היא ה-API שלמעלה, עם תקרת זמן (ברירת מחדל 30 שניות — נאכפת גם על לולאה אינסופית, ע"י הסרת ה-iframe) ותקרת קריאות (10,000).
+The default is a **real sandbox**: scripts run in an iframe with `sandbox="allow-scripts"` only — an opaque origin, no access to the application's DOM, localStorage, cookies, or credentialed network. The script's only way to touch the document is the API above, with a time cap (default 30 s — enforced even against infinite loops, by removing the iframe) and a call cap (10,000).
 
-מי שחייב לוותר על הבידוד (למשל CSP שחוסם `srcdoc`) יכול לעבור למריץ ישיר: `new MacroKit({ host, runner: 'eval' })` — ראו האזהרות בקוד.
+If you must waive isolation (e.g. a CSP that blocks `srcdoc`), switch to the direct runner: `new MacroKit({ host, runner: 'eval' })` — see the warnings in the code.
 
-## 2. מקליט מאקרו
+## 2. Macro recorder
 
 ```ts
 kit.startRecording();
-// המשתמש עובד רגיל: מקליד, מדגיש, ממספר...
-const recording = kit.stopRecording('פתיח סטנדרטי', 'Ctrl+Alt+1');
+// the user works normally: typing, formatting, lists...
+const recording = kit.stopRecording('Standard intro', 'Ctrl+Alt+1');
 
-// מאוחר יותר, מכל מקום במסמך:
+// later, from anywhere in the document:
 await kit.replayRecording(recording.id);
 ```
 
-המקליט מתעד **פקודות והקלדה**, לא מיקומי סמן — בדיוק כמו המקליט של Word: הניגון חל במקום שבו הסמן עומד. הקשות רצופות מתלכדות לצעד אחד, `undo`/`redo` אינם מוקלטים (ניתן לשינוי ב-`RecorderOptions`), וההקלטה נשמרת כ-JSON נקי שאפשר לייצא ולשתף.
+The recorder captures **commands and typing**, not caret positions — exactly like Word's recorder: replay applies wherever the caret stands. Consecutive keystrokes coalesce into one step, `undo`/`redo` are not recorded (configurable via `RecorderOptions`), and recordings persist as clean JSON that can be exported and shared. `updateRecording({id, name?, shortcut?})` renames a recording or edits its shortcut.
 
-## 3. קטעי טקסט והשלמה אוטומטית
+## 3. Snippets and auto-text
 
 ```ts
-kit.saveSnippet({ name: 'בס"ד', text: 'בס"ד', trigger: 'בסד' });
+kit.saveSnippet({ name: 'BSD', text: 'בס"ד', trigger: 'בסד' });
 kit.saveSnippet({
-  name: 'חתימה',
-  text: 'ונשלם בעז"ה, {{date}}',
+  name: 'Signature',
+  text: 'Best regards, {{date}}',
   shortcut: 'Ctrl+Alt+S',
 });
-kit.saveSnippet({ name: 'ציטוט', text: '(עיין {{selection}})' });
+kit.saveSnippet({ name: 'Citation', text: '(see {{selection}})' });
 
-kit.enableAutoText();          // מעכשיו: הקלדת "בסד" + רווח ⟵ בס"ד
-await kit.expandSnippet(id);   // או הרחבה יזומה / דרך הקיצור
+kit.enableAutoText();          // from now on: typing the trigger + space expands it
+await kit.expandSnippet(id);   // or expand explicitly / via the shortcut
 ```
 
-משתנים מובנים: `{{date}}`, `{{time}}`, `{{datetime}}` (עברית), `{{selection}}`. כל שם אחר נפתר מ-`variables` שנמסרו ל-`expandSnippet`; משתנה ללא ערך נשאר גלוי בטקסט.
+Built-in variables: `{{date}}`, `{{time}}`, `{{datetime}}` (formatted with the browser locale, or an explicit `locale` option), `{{selection}}`. Any other name resolves from the `variables` passed to `expandSnippet`; a variable with no value stays visible in the text.
 
-## שמירה, ייבוא וייצוא
+## Localization
+
+Runtime messages (failures shown to end users) default to English. A host with a localized UI swaps them once at startup:
+
+```ts
+import { setMacroMessages, HEBREW_MESSAGES } from 'superdoc-macros';
+
+setMacroMessages(HEBREW_MESSAGES);          // full Hebrew locale (included)
+setMacroMessages({ scriptNotFound: '…' });  // or a partial override
+```
+
+## Persistence, import and export
 
 ```ts
 import { createLocalStorage } from 'superdoc-macros';
 
 const kit = new MacroKit({ host, storage: createLocalStorage('my-key') });
 
-const json = kit.exportState();       // גיבוי / שיתוף
+const json = kit.exportState();       // backup / sharing
 kit.importState(json, { merge: true });
 ```
 
-`MacroStorage` הוא ממשק בן שתי מתודות — אפשר לממש שמירה לקובץ (למשל ב-workspace של תוסף אוצריא).
+`MacroStorage` is a two-method interface — implement it to persist to a file (e.g. a plugin workspace).
 
-## חיבור למארח אחר
+## Connecting a different host
 
-כל הערכה עובדת מול ממשק `MacroHost` אחד (פקודות, הכנסת טקסט, בחירה, החלפה, אירועי הקלדה). `createSuperdocHost` הוא המימוש ל-SuperDoc v2 במצב `ui: false`; עורך אחר מתחבר במימוש משלו של הממשק — ראו `src/types.ts` ואת הכפיל ב-`tests/fake-host.ts`.
+The whole toolkit works against a single `MacroHost` interface (commands, text insertion, selection, replace, typing events). `createSuperdocHost` is the implementation for SuperDoc v2 in `ui: false` mode; another editor plugs in with its own implementation — see `src/types.ts` and the double in `tests/fake-host.ts`.
 
-## מגבלות ידועות
+## Known limitations
 
-- אין הרצת VBA. קובצי `.docm` נפתחים כרגיל אבל המאקרו שבהם אינו מורץ.
-- המקליט אינו מתעד תנועת סמן ובחירה בעכבר (כמו ב-Word — הניגון פועל מהסמן הנוכחי).
-- `deleteBackward` וטקסט-מלא-של-המסמך משתמשים ב-view הפנימי של המנוע (ProseMirror) — זמינים בדפדפן, לא ב-headless.
-- תקרת הזמן במריץ `eval` אינה עוצרת לולאה סינכרונית אינסופית (במריץ ה-iframe — כן).
+- No VBA execution. `.docm` files open normally but their macros are not run.
+- The recorder does not capture caret movement or mouse selection (as in Word — replay acts from the current caret).
+- `deleteBackward` and full-document text use the engine's internal view (ProseMirror) — available in the browser, not headless.
+- The `eval` runner's time cap cannot stop an infinite synchronous loop (the iframe runner's can).
 
-## פיתוח
+## Development
 
 ```bash
 npm install
-npm test        # vitest — 43 בדיקות
-npm run build   # tsc ⟵ dist/
+npm test        # vitest
+npm run build   # tsc → dist/
 ```
 
-**שחרור גרסה:** מעלים את `version` ב-package.json ודוחפים ל-main — ה-workflow
-(‎.github/workflows/release.yml) מפרסם ל-npm ויוצר GitHub Release אוטומטית.
+**Releasing:** bump `version` in package.json and push to main — the workflow (.github/workflows/release.yml) publishes to npm and creates a GitHub Release automatically.
 
-## רישיון
+## License
 
 MIT

@@ -1,25 +1,28 @@
 /**
- * מימוש `MacroHost` מעל SuperDoc v2 במצב מנוע-בלבד (`ui: false`) — הקונפיגורציה
- * של otzaria-word-editor.
+ * The `MacroHost` implementation on top of SuperDoc v2 in engine-only mode
+ * (`ui: false`) — the configuration otzaria-word-editor runs.
  *
- * המשטחים שבשימוש, לפי סדר עדיפות:
- *   1. `superdoc.ui.commands` — קטלוג הפקודות של ה-controller (הרצה + תצפית).
- *   2. `superdoc.activeEditor.doc` — ה-Document API הציבורי (בחירה, הכנסה, בלוקים).
- *   3. `superdoc.ui.search` — חיפוש/החלפה.
- *   4. `superdoc.activeEditor.view` — מופע ProseMirror הפנימי, **רק** לפערים
- *      שאין להם משטח ציבורי: מחיקה לאחור וטקסט מלא של המסמך. קיים בדפדפן
- *      ו-null ב-headless.
+ * The surfaces used, in order of preference:
+ *   1. `superdoc.ui.commands` — the controller's command catalog (execution + observation).
+ *   2. `superdoc.activeEditor.doc` — the public Document API (selection, insertion, blocks).
+ *   3. `superdoc.ui.search` — find/replace.
+ *   4. `superdoc.activeEditor.view` — the internal ProseMirror instance,
+ *      **only** for gaps that have no public surface: backward deletion and
+ *      the document's full text. Present in the browser, null headless.
  *
- * הטיפוסים כאן מבניים (structural) ואינם מייבאים מ-superdoc: הערכה לא תלויה
- * בחבילה, וגרסת מנוע שמשנה שדה תיכשל סגור (הפונקציה תחזיר כשל) ולא תקרוס.
+ * The types here are structural and do not import from superdoc: the toolkit
+ * does not depend on the package, and an engine version that changes a field
+ * fails closed (the function returns a failure) rather than crashing.
  *
- * תצפית הפקודות למקליט נעשית בעטיפת `executeAsync` על אובייקט ה-commands.
- * זה מכסה כל מסלול שקורא לו — כולל ה-CommandAdapter של otzaria — בלי לשנות
- * את הקוד הקורא. `dispose()` מחזיר את המתודה המקורית.
+ * Command observation for the recorder wraps `executeAsync` on the commands
+ * object. That covers every path that calls it — including otzaria's
+ * CommandAdapter — without changing the calling code. `dispose()` restores
+ * the original method.
  */
+import { macroMessages } from '../messages.js';
 import type { MacroHost, MacroOutcome, SelectionSnapshot, TextInputEvent } from '../types.js';
 
-/* ---------- הצורות הנצרכות מהמנוע ---------- */
+/* ---------- The shapes consumed from the engine ---------- */
 
 interface CommandStateLike {
   reason?: string;
@@ -89,18 +92,20 @@ export interface SuperdocLike {
 
 export interface SuperdocHostOptions {
   superdoc: SuperdocLike;
-  /** האלמנט שהמסמך מרונדר בתוכו — עליו נקלטים אירועי ההקלדה. */
+  /** The element the document renders in — typing events are captured on it. */
   container?: HTMLElement | null;
 }
 
 export interface SuperdocMacroHost extends MacroHost {
-  /** מסירה את עטיפת התצפית ואת מאזיני ה-DOM. לקרוא לפני החלפת מסמך. */
+  /** Removes the observation wrapper and the DOM listeners. Call before swapping documents. */
   dispose(): void;
 }
 
-/* ---------- עזרים ---------- */
+/* ---------- Helpers ---------- */
 
-const NOT_READY: MacroOutcome = { ok: false, message: 'אין מסמך פתוח', reason: 'not-ready' };
+function notReady(): MacroOutcome {
+  return { ok: false, message: macroMessages().noDocument, reason: 'not-ready' };
+}
 
 function failed(message: string, reason?: string): MacroOutcome {
   return { ok: false, message, reason };
@@ -120,12 +125,12 @@ function emptySelection(): SelectionSnapshot {
   return { text: '', hasRange: false, blockId: null, selectionTarget: null, empty: true };
 }
 
-/* ---------- המימוש ---------- */
+/* ---------- The implementation ---------- */
 
 export function createSuperdocHost(options: SuperdocHostOptions): SuperdocMacroHost {
   const { superdoc, container } = options;
 
-  // נקראים ברגע השימוש ולא נשמרים: activeEditor מוחלף בכל פתיחת מסמך.
+  // Read at call time, never cached: activeEditor is replaced on every document open.
   const commands = (): CommandsLike | null => superdoc.ui?.commands ?? null;
   const doc = (): DocLike | null => superdoc.activeEditor?.doc ?? null;
   const view = (): ProseMirrorViewLike | null => superdoc.activeEditor?.view ?? null;
@@ -134,7 +139,7 @@ export function createSuperdocHost(options: SuperdocHostOptions): SuperdocMacroH
   const commandListeners = new Set<(id: string, payload: unknown) => void>();
   const inputListeners = new Set<(event: TextInputEvent) => void>();
 
-  /* תצפית פקודות: עטיפת executeAsync, פעם אחת, עם שחזור ב-dispose. */
+  /* Command observation: wrap executeAsync, once, restored on dispose. */
   const wrapped = commands();
   const originalExecuteAsync = wrapped?.executeAsync;
   if (wrapped && originalExecuteAsync) {
@@ -143,14 +148,14 @@ export function createSuperdocHost(options: SuperdocHostOptions): SuperdocMacroH
         try {
           listener(id, payload);
         } catch (error) {
-          console.warn('[superdoc-macros] מאזין פקודות זרק', error);
+          console.warn('[superdoc-macros] command listener threw', error);
         }
       }
       return originalExecuteAsync.call(wrapped, id, payload);
     };
   }
 
-  /* הקלדה: beforeinput על ה-container, בשלב הלכידה. */
+  /* Typing: beforeinput on the container, capture phase. */
   const onBeforeInput = (event: Event): void => {
     const input = event as InputEvent;
     let mapped: TextInputEvent | null = null;
@@ -178,7 +183,7 @@ export function createSuperdocHost(options: SuperdocHostOptions): SuperdocMacroH
       try {
         listener(mapped);
       } catch (error) {
-        console.warn('[superdoc-macros] מאזין הקלדה זרק', error);
+        console.warn('[superdoc-macros] input listener threw', error);
       }
     }
   };
@@ -229,23 +234,23 @@ export function createSuperdocHost(options: SuperdocHostOptions): SuperdocMacroH
       },
       async execute(id, payload): Promise<MacroOutcome> {
         const bus = commands();
-        if (!bus) return NOT_READY;
-        if (!bus.has(id)) return failed(`הפקודה ${id} אינה מוכרת למנוע`, 'unknown-command');
+        if (!bus) return notReady();
+        if (!bus.has(id)) return failed(macroMessages().unknownCommand(id), 'unknown-command');
 
         let result: unknown;
         try {
           result = await bus.executeAsync(id, payload);
         } catch (error) {
-          return failed(error instanceof Error ? error.message : 'הפעולה נכשלה', 'threw');
+          return failed(error instanceof Error ? error.message : macroMessages().actionFailed, 'threw');
         }
 
-        // false = ה-controller לא ניתב את הפקודה; מצב הפקד מסביר למה.
+        // false = the controller did not route the command; the command state explains why.
         if (result === false) {
           const reason = bus.get(id).getState().reason;
-          return failed(reason ? `הפעולה נכשלה (${reason})` : 'הפעולה נכשלה', reason);
+          return failed(reason ? `${macroMessages().actionFailed} (${reason})` : macroMessages().actionFailed, reason);
         }
         if (typeof result === 'object' && result !== null) {
-          return receiptOutcome(result as DocReceiptLike, `הפקודה ${id} נכשלה`);
+          return receiptOutcome(result as DocReceiptLike, macroMessages().commandFailed(id));
         }
         return { ok: true };
       },
@@ -254,7 +259,7 @@ export function createSuperdocHost(options: SuperdocHostOptions): SuperdocMacroH
     async insertText(text): Promise<MacroOutcome> {
       const insert = doc()?.insert;
       if (typeof insert === 'function') {
-        // בלי target ההכנסה נופלת לסוף המסמך — לכן היעד נלקח מהבחירה החיה.
+        // Without a target the insertion falls to the end of the document — so the target comes from the live selection.
         const snapshot = await readSelection(false);
         try {
           const receipt = await insert({
@@ -262,13 +267,13 @@ export function createSuperdocHost(options: SuperdocHostOptions): SuperdocMacroH
             type: 'text',
             ...(snapshot.selectionTarget ? { target: snapshot.selectionTarget } : {}),
           });
-          return receiptOutcome(receipt, 'הכנסת הטקסט נכשלה');
+          return receiptOutcome(receipt, macroMessages().insertTextFailed);
         } catch (error) {
-          return failed(error instanceof Error ? error.message : 'הכנסת הטקסט נכשלה', 'threw');
+          return failed(error instanceof Error ? error.message : macroMessages().insertTextFailed, 'threw');
         }
       }
 
-      // נפילה לאחור: ProseMirror ישיר, כשה-Document API אינו זמין.
+      // Fallback: direct ProseMirror, when the Document API is unavailable.
       const pm = view();
       if (pm) {
         try {
@@ -278,16 +283,16 @@ export function createSuperdocHost(options: SuperdocHostOptions): SuperdocMacroH
           pm.dispatch(tr);
           return { ok: true };
         } catch (error) {
-          return failed(error instanceof Error ? error.message : 'הכנסת הטקסט נכשלה', 'threw');
+          return failed(error instanceof Error ? error.message : macroMessages().insertTextFailed, 'threw');
         }
       }
-      return NOT_READY;
+      return notReady();
     },
 
     async deleteBackward(count): Promise<MacroOutcome> {
-      // אין משטח ציבורי למחיקה — זה השימוש המרכזי ב-escape hatch של ProseMirror.
+      // No public deletion surface — this is the main use of the ProseMirror escape hatch.
       const pm = view();
-      if (!pm) return failed('מחיקה אינה זמינה במסמך הזה', 'view-unavailable');
+      if (!pm) return failed(macroMessages().deletionUnavailable, 'view-unavailable');
       try {
         const { from } = pm.state.selection;
         const start = Math.max(0, from - Math.max(0, Math.trunc(count)));
@@ -297,7 +302,7 @@ export function createSuperdocHost(options: SuperdocHostOptions): SuperdocMacroH
         pm.dispatch(tr);
         return { ok: true };
       } catch (error) {
-        return failed(error instanceof Error ? error.message : 'המחיקה נכשלה', 'threw');
+        return failed(error instanceof Error ? error.message : macroMessages().deleteFailed, 'threw');
       }
     },
 
@@ -307,30 +312,34 @@ export function createSuperdocHost(options: SuperdocHostOptions): SuperdocMacroH
 
     async replaceAll(query, replacement) {
       const handle = search();
-      if (!handle) return { ok: false, replaced: 0, message: 'החיפוש אינו זמין' };
+      if (!handle) return { ok: false, replaced: 0, message: macroMessages().searchUnavailable };
 
       try {
         handle.open?.();
         const slice = handle.search(query);
         if (slice?.available === false) {
-          return { ok: false, replaced: 0, message: 'החיפוש אינו זמין במסמך הזה' };
+          return { ok: false, replaced: 0, message: macroMessages().searchUnavailableInDocument };
         }
         const total = typeof slice?.total === 'number' ? slice.total : 0;
         if (total === 0) return { ok: true, replaced: 0 };
 
         const result = await handle.replaceAll(replacement);
         if (result && result.ok === false) {
-          return { ok: false, replaced: 0, message: `ההחלפה נכשלה${result.reason ? ` (${result.reason})` : ''}` };
+          return {
+            ok: false,
+            replaced: 0,
+            message: `${macroMessages().replaceFailed}${result.reason ? ` (${result.reason})` : ''}`,
+          };
         }
         return { ok: true, replaced: total };
       } catch (error) {
-        return { ok: false, replaced: 0, message: error instanceof Error ? error.message : 'ההחלפה נכשלה' };
+        return { ok: false, replaced: 0, message: error instanceof Error ? error.message : macroMessages().replaceFailed };
       } finally {
         try {
           handle.clear?.();
           handle.close?.();
         } catch {
-          /* ניקוי בלבד */
+          /* cleanup only */
         }
       }
     },

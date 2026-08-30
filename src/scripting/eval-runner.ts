@@ -1,14 +1,17 @@
 /**
- * מריץ סקריפטים ישיר — `AsyncFunction` באותו הקשר של הדף.
+ * Direct script runner — `AsyncFunction` in the page's own context.
  *
- * **אינו ארגז חול.** סקריפט שרץ כאן מקבל גישה לכל מה שהדף מכיר. מיועד לשני
- * מצבים: בדיקות, וסביבה שבה כל המאקרו נכתבים בידי המשתמש עצמו והוחלט
- * במפורש לוותר על בידוד (למשל בגלל CSP שחוסם iframe). ברירת המחדל של
- * `MacroKit` היא מריץ ה-iframe.
+ * **Not a sandbox.** A script running here can reach everything the page
+ * can. It exists for two situations: tests, and environments where every
+ * macro is written by the user themselves and isolation was explicitly
+ * waived (e.g. a CSP that blocks iframes). `MacroKit` defaults to the
+ * iframe runner.
  *
- * תקרת הזמן כאן היא race על ההבטחה בלבד: לולאה סינכרונית אינסופית תחסום את
- * ה-thread ולא תיעצר. תקרת הקריאות כן נאכפת, דרך ה-bridge.
+ * The time cap here is only a race on the promise: an infinite synchronous
+ * loop blocks the thread and will not be stopped. The call cap is enforced
+ * for real, through the bridge.
  */
+import { macroMessages } from '../messages.js';
 import type { MacroBridge } from './macro-api.js';
 import {
   DEFAULT_MAX_API_CALLS,
@@ -19,26 +22,24 @@ import {
 } from './runner.js';
 
 const AsyncFunction = Object.getPrototypeOf(async function () {
-  /* טיפוס בלבד */
+  /* type only */
 }).constructor as new (...args: string[]) => (...fnArgs: unknown[]) => Promise<unknown>;
 
-/** עוטפת bridge בתקרת קריאות. חשופה כדי ששני המריצים ישתמשו באותה אכיפה. */
+/** Wraps a bridge with a call cap. Exposed so both runners share the same enforcement. */
 export function limitCalls(bridge: MacroBridge, maxCalls: number): MacroBridge {
   return {
     api: bridge.api,
     callCount: bridge.callCount,
     call(method, args) {
       if (bridge.callCount() >= maxCalls) {
-        return Promise.reject(
-          new Error(`המאקרו חצה את תקרת הקריאות (${maxCalls}) ונעצר`),
-        );
+        return Promise.reject(new Error(macroMessages().callLimitExceeded(maxCalls)));
       }
       return bridge.call(method, args);
     },
   };
 }
 
-/** proxy של api שמנתב הכול דרך `bridge.call`, כדי שהתקרה תיאכף גם כאן. */
+/** An api proxy that routes everything through `bridge.call`, so the cap applies here too. */
 function apiThroughBridge(bridge: MacroBridge): unknown {
   return new Proxy(
     {},
@@ -64,14 +65,14 @@ export function createEvalRunner(): MacroRunner {
         return {
           ok: false,
           reason: 'error',
-          message: `שגיאת תחביר במאקרו: ${error instanceof Error ? error.message : String(error)}`,
+          message: macroMessages().syntaxError(error instanceof Error ? error.message : String(error)),
         };
       }
 
       let timer: ReturnType<typeof setTimeout> | undefined;
       const timeout = new Promise<MacroRunResult>((resolve) => {
         timer = setTimeout(
-          () => resolve({ ok: false, reason: 'timeout', message: `המאקרו לא הסתיים תוך ${timeoutMs / 1000} שניות ונעצר` }),
+          () => resolve({ ok: false, reason: 'timeout', message: macroMessages().timedOut(timeoutMs / 1000) }),
           timeoutMs,
         );
       });

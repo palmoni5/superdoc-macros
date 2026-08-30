@@ -1,7 +1,8 @@
 /**
- * קיצורי מקלדת למאקרו ולקטעים: ניתוח מחרוזת `Ctrl+Alt+M` והתאמה לאירוע.
+ * Keyboard shortcuts for macros and snippets: parsing a `Ctrl+Alt+M` string
+ * and matching it against an event.
  *
- * ההתאמה לפי `event.key` באותיות קטנות. `Mod` פירושו Ctrl (או ⌘ במק).
+ * Matching is by lowercased `event.key`. `Mod` means Ctrl (or ⌘ on macOS).
  */
 export interface ParsedShortcut {
   key: string;
@@ -9,11 +10,11 @@ export interface ParsedShortcut {
   alt: boolean;
   shift: boolean;
   meta: boolean;
-  /** Ctrl או Meta — לקיצורים שנכתבו עם `Mod`. */
+  /** Ctrl or Meta — for shortcuts written with `Mod`. */
   mod: boolean;
 }
 
-/** תת-הצורה של KeyboardEvent שההתאמה צריכה. מאפשר בדיקות בלי DOM. */
+/** The subset of KeyboardEvent that matching needs. Enables DOM-free tests. */
 export interface KeyEventLike {
   key: string;
   ctrlKey: boolean;
@@ -55,7 +56,7 @@ export function parseShortcut(shortcut: string): ParsedShortcut | null {
         parsed.mod = true;
         break;
       default: {
-        if (parsed.key) return null; // שני מקשים שאינם modifiers — קיצור פסול.
+        if (parsed.key) return null; // two non-modifier keys — an invalid shortcut.
         parsed.key = normalizeKey(part);
       }
     }
@@ -76,7 +77,7 @@ export function eventMatches(parsed: ParsedShortcut, event: KeyEventLike): boole
 
   if (parsed.mod) {
     if (!event.ctrlKey && !event.metaKey) return false;
-    // עם Mod לא בודקים ctrl/meta בנפרד — אבל alt/shift חייבים להתאים בדיוק.
+    // With Mod, ctrl/meta are not checked individually — but alt/shift must match exactly.
     return event.altKey === parsed.alt && event.shiftKey === parsed.shift;
   }
 
@@ -99,8 +100,9 @@ export interface ShortcutTarget {
 }
 
 /**
- * קושרת קיצורים ליעד. `getBindings` נקראת בכל הקשה — כך רשימת המאקרו יכולה
- * להשתנות בלי לקשור מחדש. מחזירה פונקציית ניתוק.
+ * Binds shortcuts to a target. `getBindings` is called on every keystroke —
+ * so the macro list can change without rebinding. Returns a dispose
+ * function.
  */
 export function bindShortcuts(target: ShortcutTarget, getBindings: () => readonly ShortcutBinding[]): () => void {
   const listener = (event: KeyboardEvent): void => {

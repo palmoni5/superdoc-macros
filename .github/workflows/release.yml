@@ -1,12 +1,15 @@
-# שחרור אוטומטי: כל דחיפה ל-main שמעלה את הגרסה ב-package.json מפרסמת
-# ל-npm ויוצרת GitHub Release עם תג v<version> — בלי אף צעד ידני.
+# Automated releases: every push to main that bumps the version in
+# package.json publishes to npm and creates a GitHub Release tagged
+# v<version> — no manual step.
 #
-# הכול ב-job אחד ובכוונה: Release שנוצר מ-GITHUB_TOKEN אינו מפעיל workflows
-# אחרים (הגנת הרקורסיה של GitHub), ולכן פרסום ב-workflow נפרד שמאזין
-# ל-release לא היה רץ לעולם במסלול האוטומטי.
+# Everything in one job, deliberately: a Release created with GITHUB_TOKEN
+# does not trigger other workflows (GitHub's recursion guard), so publishing
+# from a separate release-triggered workflow would never run on the
+# automated path.
 #
-# דרישה חד-פעמית: secret בשם NPM_TOKEN (טוקן Automation מ-npmjs.com).
-# גרסה שכבר קיימת ב-npm פשוט מדלגת — דחיפות רגילות בלי העלאת גרסה ירוקות.
+# One-time requirement: a secret named NPM_TOKEN (an Automation token from
+# npmjs.com). A version that already exists on npm is simply skipped —
+# ordinary pushes without a bump stay green.
 name: Release
 
 on:
@@ -17,8 +20,8 @@ jobs:
   release:
     runs-on: ubuntu-latest
     permissions:
-      contents: write # יצירת ה-Release והתג
-      id-token: write # provenance של npm
+      contents: write # creating the Release and tag
+      id-token: write # npm provenance
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -55,8 +58,8 @@ jobs:
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
-      # אחרי הפרסום ולא לפניו: אם הפרסום נכשל, לא נשאר Release שמצביע על
-      # גרסה שאינה קיימת ב-npm.
+      # After the publish, not before: if publishing fails, no Release is
+      # left pointing at a version that does not exist on npm.
       - if: steps.version.outputs.new == 'true'
         name: Create GitHub Release
         run: gh release create "v$VERSION" --title "v$VERSION" --generate-notes

@@ -1,11 +1,11 @@
 /**
- * `MacroKit` — הפאסדה שמארח מתקין פעם אחת ומקבל את שלוש היכולות מחווטות:
- * סקריפטים (עם ארגז חול), מקליט, וקטעי טקסט עם השלמה אוטומטית — פלוס שמירה,
- * ייבוא/ייצוא וקיצורי מקלדת.
+ * `MacroKit` — the facade a host installs once to get all three capabilities
+ * wired together: scripts (sandboxed), the recorder, and snippets with
+ * auto-text — plus persistence, import/export and keyboard shortcuts.
  *
- * כלל בטיחות אחד נאכף כאן: אין ריצה בזמן הקלטה ואין שתי ריצות במקביל.
- * ניגון או סקריפט שרצים תוך כדי הקלטה היו מוקלטים בעצמם ומכפילים את עצמם
- * בניגון הבא.
+ * One safety rule is enforced here: no running while recording, and no two
+ * runs at once. A replay or script running during a recording would be
+ * recorded itself and duplicate itself on the next replay.
  */
 import { createMacroApi, type MacroApiOptions } from './scripting/macro-api.js';
 import { createEvalRunner } from './scripting/eval-runner.js';
@@ -16,22 +16,24 @@ import { AutoText, type AutoTextOptions } from './snippets/autotext.js';
 import { expandSnippet, type ExpandOptions } from './snippets/snippets.js';
 import { bindShortcuts, type ShortcutBinding, type ShortcutTarget } from './shortcuts.js';
 import { createLocalStorage, emptyState, parsePersistedState, type MacroStorage, type PersistedMacroState } from './storage.js';
+import { macroMessages } from './messages.js';
 import type { MacroHost, MacroStep, RecordedMacro, SavedScript, Snippet } from './types.js';
 
 export interface MacroKitOptions {
   host: MacroHost;
-  /** ברירת מחדל: localStorage. */
+  /** Default: localStorage. */
   storage?: MacroStorage;
   /**
-   * `'iframe'` (ברירת המחדל) מריץ סקריפטים בארגז חול; `'eval'` מריץ ישירות —
-   * ראו את האזהרה ב-eval-runner. אפשר גם למסור מריץ מותאם.
+   * `'iframe'` (the default) runs scripts in a sandbox; `'eval'` runs them
+   * directly — see the warning in eval-runner. A custom runner can also be
+   * passed.
    */
   runner?: MacroRunner | 'iframe' | 'eval';
-  /** אפשרויות ריצה לסקריפטים (זמן, תקרת קריאות). */
+  /** Run options for scripts (time, call cap). */
   runOptions?: MacroRunOptions;
-  /** אפשרויות ההשלמה האוטומטית. */
+  /** Auto-text options. */
   autoText?: Omit<AutoTextOptions, 'onExpand' | 'onError'> & AutoTextOptions;
-  /** יומן ריצה של `api.log`. */
+  /** Run log for `api.log`. */
   onLog?: MacroApiOptions['onLog'];
 }
 
@@ -73,7 +75,7 @@ export class MacroKit {
     this.autoText = new AutoText(this.host, () => this.state.snippets, options.autoText);
   }
 
-  /* ---------- סקריפטים ---------- */
+  /* ---------- Scripts ---------- */
 
   listScripts(): readonly SavedScript[] {
     return this.state.scripts;
@@ -98,11 +100,11 @@ export class MacroKit {
 
   async runScript(id: string): Promise<MacroRunResult> {
     const script = this.state.scripts.find((entry) => entry.id === id);
-    if (!script) return { ok: false, reason: 'error', message: 'המאקרו לא נמצא' };
+    if (!script) return { ok: false, reason: 'error', message: macroMessages().scriptNotFound };
     return this.runSource(script.source);
   }
 
-  /** מריצה סקריפט שלא נשמר — למשל מתוך עורך המאקרו לפני שמירה. */
+  /** Runs an unsaved script — e.g. from the macro editor before saving. */
   async runSource(source: string): Promise<MacroRunResult> {
     const guard = this.guardRun();
     if (guard) return guard;
@@ -116,7 +118,7 @@ export class MacroKit {
     }
   }
 
-  /* ---------- מקליט ---------- */
+  /* ---------- Recorder ---------- */
 
   get isRecording(): boolean {
     return this.recorder.recording;
@@ -131,7 +133,7 @@ export class MacroKit {
     this.recorder.start();
   }
 
-  /** עוצרת ושומרת. `null` כשלא הוקלט אף צעד — אין מה לשמור. */
+  /** Stops and saves. `null` when no step was recorded — there is nothing to save. */
   stopRecording(name: string, shortcut?: string): RecordedMacro | null {
     const steps: MacroStep[] = this.recorder.stop();
     if (steps.length === 0) return null;
@@ -162,7 +164,7 @@ export class MacroKit {
     this.persist();
   }
 
-  /** עדכון שם או קיצור של הקלטה קיימת. `null` כשההקלטה לא נמצאה. */
+  /** Renames a recording or edits its shortcut. `null` when the recording was not found. */
   updateRecording(input: { id: string; name?: string; shortcut?: string }): RecordedMacro | null {
     const recording = this.state.recordings.find((entry) => entry.id === input.id);
     if (!recording) return null;
@@ -177,7 +179,13 @@ export class MacroKit {
 
   async replayRecording(id: string, options?: ReplayOptions): Promise<ReplayResult> {
     const recording = this.state.recordings.find((entry) => entry.id === id);
-    if (!recording) return { ok: false, completed: 0, failures: [{ stepIndex: -1, step: { type: 'insert-text', text: '' }, message: 'ההקלטה לא נמצאה' }] };
+    if (!recording) {
+      return {
+        ok: false,
+        completed: 0,
+        failures: [{ stepIndex: -1, step: { type: 'insert-text', text: '' }, message: macroMessages().recordingNotFound }],
+      };
+    }
 
     const guard = this.guardRun();
     if (guard) {
@@ -192,7 +200,7 @@ export class MacroKit {
     }
   }
 
-  /* ---------- קטעי טקסט ---------- */
+  /* ---------- Snippets ---------- */
 
   listSnippets(): readonly Snippet[] {
     return this.state.snippets;
@@ -218,12 +226,12 @@ export class MacroKit {
 
   async expandSnippet(id: string, options?: ExpandOptions): Promise<{ ok: boolean; message?: string }> {
     const snippet = this.state.snippets.find((entry) => entry.id === id);
-    if (!snippet) return { ok: false, message: 'הקטע לא נמצא' };
+    if (!snippet) return { ok: false, message: macroMessages().snippetNotFound };
     const outcome = await expandSnippet(this.host, snippet, options);
     return outcome.ok ? { ok: true } : { ok: false, message: outcome.message };
   }
 
-  /** מפעילה השלמה אוטומטית (trigger + רווח). מחזירה פונקציית כיבוי. */
+  /** Enables auto-text (trigger + space). Returns a disable function. */
   enableAutoText(): () => void {
     return this.autoText.attach();
   }
@@ -232,12 +240,13 @@ export class MacroKit {
     this.autoText.detach();
   }
 
-  /* ---------- קיצורי מקלדת ---------- */
+  /* ---------- Keyboard shortcuts ---------- */
 
   /**
-   * קושרת את הקיצורים של כל מה ששמור (סקריפטים, הקלטות, קטעים) ליעד — בדרך
-   * כלל ה-container של העורך או `window`. הרשימה חיה: שמירה חדשה נקלטת בלי
-   * לקשור מחדש. מחזירה פונקציית ניתוק.
+   * Binds the shortcuts of everything saved (scripts, recordings, snippets)
+   * to a target — usually the editor container or `window`. The list is
+   * live: a new save is picked up without rebinding. Returns a dispose
+   * function.
    */
   attachShortcuts(target: ShortcutTarget): () => void {
     return bindShortcuts(target, () => this.currentBindings());
@@ -257,19 +266,20 @@ export class MacroKit {
     return bindings;
   }
 
-  /* ---------- ייבוא/ייצוא ---------- */
+  /* ---------- Import/export ---------- */
 
   exportState(): string {
     return JSON.stringify(this.state, null, 2);
   }
 
   /**
-   * ייבוא מ-JSON שיוצא ב-`exportState`. במיזוג (`merge: true`) פריט מיובא עם
-   * `id` קיים מחליף את הקיים; בלי מיזוג המצב כולו מוחלף.
+   * Imports JSON produced by `exportState`. With `merge: true` an imported
+   * item with an existing `id` replaces it; without merge the whole state is
+   * replaced.
    */
   importState(json: string, options: { merge?: boolean } = {}): { ok: boolean; message?: string } {
     const imported = parsePersistedState(json);
-    if (!imported) return { ok: false, message: 'הקובץ אינו ייצוא מאקרו תקין' };
+    if (!imported) return { ok: false, message: macroMessages().invalidImport };
 
     if (options.merge) {
       for (const script of imported.scripts) this.upsert(this.state.scripts, script);
@@ -282,14 +292,14 @@ export class MacroKit {
     return { ok: true };
   }
 
-  /* ---------- פנימי ---------- */
+  /* ---------- Internal ---------- */
 
   private guardRun(): { ok: false; reason: 'error'; message: string } | null {
     if (this.recorder.recording) {
-      return { ok: false, reason: 'error', message: 'אי אפשר להריץ מאקרו בזמן הקלטה' };
+      return { ok: false, reason: 'error', message: macroMessages().cannotRunWhileRecording };
     }
     if (this.running) {
-      return { ok: false, reason: 'error', message: 'מאקרו אחר עדיין רץ' };
+      return { ok: false, reason: 'error', message: macroMessages().anotherMacroRunning };
     }
     return null;
   }

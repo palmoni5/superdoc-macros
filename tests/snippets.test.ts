@@ -6,25 +6,31 @@ import { createFakeHost } from './fake-host.js';
 describe('renderSnippet', () => {
   const now = new Date(2026, 7, 30, 14, 5);
 
-  it('פותר משתנים מובנים ומותאמים', () => {
+  it('resolves built-in and custom variables', () => {
     const rendered = renderSnippet('היום {{date}} — {{שם}}', {
       now,
       variables: { שם: 'ראובן' },
     });
-    expect(rendered).toBe(`היום ${now.toLocaleDateString('he-IL')} — ראובן`);
+    expect(rendered).toBe(`היום ${now.toLocaleDateString()} — ראובן`);
   });
 
-  it('משתנה בלי ערך נשאר גלוי בטקסט', () => {
+  it('formats dates with an explicit locale when given', () => {
+    expect(renderSnippet('{{date}}', { now, locale: 'he-IL' })).toBe(
+      now.toLocaleDateString('he-IL'),
+    );
+  });
+
+  it('a variable with no value stays visible in the text', () => {
     expect(renderSnippet('שלום {{מי-זה}}', { now })).toBe('שלום {{מי-זה}}');
   });
 
-  it('{{selection}} מקבל את טקסט הבחירה', () => {
+  it('{{selection}} receives the selection text', () => {
     expect(renderSnippet('(עיין {{selection}})', { selectionText: 'ברכות ג.' })).toBe('(עיין ברכות ג.)');
   });
 });
 
 describe('expandSnippet', () => {
-  it('מכניס את הקטע המורחב במיקום הסמן', async () => {
+  it('inserts the rendered snippet at the caret', async () => {
     const host = createFakeHost();
     await host.typeText('לפני ');
 
@@ -34,7 +40,7 @@ describe('expandSnippet', () => {
     expect(host.text).toBe('לפני בעזרת השם');
   });
 
-  it('קורא את הבחירה רק כשהקטע צריך אותה', async () => {
+  it('reads the selection only when the snippet needs it', async () => {
     const host = createFakeHost();
     await host.typeText('דברי המחבר');
     host.selection = { from: 0, to: 4 };
@@ -62,17 +68,17 @@ describe('AutoText', () => {
     return { host, autoText };
   }
 
-  it('מרחיב מילת הפעלה אחרי רווח', async () => {
+  it('expands a trigger word after a space', async () => {
     const { host } = setup([{ trigger: 'בסד', text: 'בס"ד' }]);
 
     await host.typeText('בסד ');
-    // ההרחבה א-סינכרונית — ממתינים לתור המיקרו-משימות.
+    // Expansion is async — wait for the task queue.
     await new Promise((resolve) => setTimeout(resolve, 0));
 
     expect(host.text).toBe('בס"ד ');
   });
 
-  it('מילה שאינה trigger נשארת כמו שהיא', async () => {
+  it('a word that is not a trigger stays as typed', async () => {
     const { host } = setup([{ trigger: 'בסד', text: 'בס"ד' }]);
 
     await host.typeText('שלום ');
@@ -81,7 +87,7 @@ describe('AutoText', () => {
     expect(host.text).toBe('שלום ');
   });
 
-  it('Backspace באמצע המילה מעדכן את הזיהוי', async () => {
+  it('Backspace mid-word updates recognition', async () => {
     const { host } = setup([{ trigger: 'בסד', text: 'בס"ד' }]);
 
     await host.typeText('בסדר');
@@ -92,7 +98,7 @@ describe('AutoText', () => {
     expect(host.text).toBe('בס"ד ');
   });
 
-  it('פסקה חדשה מאפסת את החוצץ', async () => {
+  it('a new paragraph resets the buffer', async () => {
     const { host } = setup([{ trigger: 'בסד', text: 'בס"ד' }]);
 
     await host.typeText('בסד\n ');
@@ -101,7 +107,7 @@ describe('AutoText', () => {
     expect(host.text).toBe('בסד\n ');
   });
 
-  it('detach מפסיק את ההרחבה', async () => {
+  it('detach stops expansion', async () => {
     const { host, autoText } = setup([{ trigger: 'בסד', text: 'בס"ד' }]);
     autoText.detach();
 

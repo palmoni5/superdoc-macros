@@ -1,6 +1,7 @@
 /**
- * שמירת המאקרו, ההקלטות והקטעים. ברירת המחדל: localStorage; הממשק ניתן
- * להחלפה כדי שמארח יוכל לשמור בקובץ (למשל ב-workspace של תוסף אוצריא).
+ * Persistence for macros, recordings and snippets. Default: localStorage;
+ * the interface is swappable so a host can persist to a file (e.g. a
+ * plugin workspace).
  */
 import type { RecordedMacro, SavedScript, Snippet } from './types.js';
 
@@ -12,7 +13,7 @@ export interface PersistedMacroState {
 }
 
 export interface MacroStorage {
-  /** `null` כשאין מצב שמור או כשהשמור אינו קריא. */
+  /** `null` when there is no saved state or the saved state is unreadable. */
   load(): PersistedMacroState | null;
   save(state: PersistedMacroState): void;
 }
@@ -32,7 +33,7 @@ function isValidState(value: unknown): value is PersistedMacroState {
   );
 }
 
-/** מפענחת מצב שמור. `null` על כל צורה לא צפויה — לא זורקת. */
+/** Parses saved state. `null` on any unexpected shape — never throws. */
 export function parsePersistedState(json: string): PersistedMacroState | null {
   try {
     const parsed: unknown = JSON.parse(json);
@@ -44,7 +45,7 @@ export function parsePersistedState(json: string): PersistedMacroState | null {
 
 export const DEFAULT_STORAGE_KEY = 'superdoc-macros:v1';
 
-/** localStorage עם הגנות: גישה חסומה או מלאה אינה מפילה את הערכה. */
+/** localStorage with guards: blocked or full storage must not take the toolkit down. */
 export function createLocalStorage(
   key: string = DEFAULT_STORAGE_KEY,
   storage?: Pick<Storage, 'getItem' | 'setItem'>,
@@ -71,13 +72,13 @@ export function createLocalStorage(
       try {
         backing()?.setItem(key, JSON.stringify(state));
       } catch (error) {
-        console.warn('[superdoc-macros] שמירת המאקרו נכשלה', error);
+        console.warn('[superdoc-macros] saving macros failed', error);
       }
     },
   };
 }
 
-/** אחסון בזיכרון — לבדיקות ולמצבים שבהם אין persistence. */
+/** In-memory storage — for tests and for setups with no persistence. */
 export function createMemoryStorage(): MacroStorage {
   let saved: PersistedMacroState | null = null;
   return {

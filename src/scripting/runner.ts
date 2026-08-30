@@ -1,4 +1,4 @@
-/** חוזה משותף לשני המריצים (eval ו-iframe). */
+/** Contract shared by the two runners (eval and iframe). */
 import type { MacroBridge } from './macro-api.js';
 
 export type MacroRunResult =
@@ -6,9 +6,9 @@ export type MacroRunResult =
   | { ok: false; message: string; reason?: 'timeout' | 'error' | 'call-limit' };
 
 export interface MacroRunOptions {
-  /** תקרת זמן לריצה כולה. ברירת מחדל: 30 שניות. */
+  /** Time cap for the whole run. Default: 30 seconds. */
   timeoutMs?: number;
-  /** תקרת קריאות API, נגד לולאה בורחת. ברירת מחדל: 10,000. */
+  /** API call cap, against runaway loops. Default: 10,000. */
   maxApiCalls?: number;
 }
 

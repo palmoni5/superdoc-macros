@@ -1,17 +1,21 @@
 /**
- * ה-API שסקריפט מאקרו מקבל.
+ * The API a macro script receives.
  *
- * שני צרכנים לאותו מימוש: מריץ ה-eval מקבל את האובייקט `api` ישירות, ומריץ
- * ה-iframe מדבר איתו דרך `call(method, args)` — RPC על postMessage. לכן כל
- * מתודה רשומה במילון אחד, וה-proxy בתוך ה-iframe פונה לאותם שמות בדיוק.
+ * Two consumers share one implementation: the eval runner hands the `api`
+ * object to the script directly, and the iframe runner talks to it through
+ * `call(method, args)` — RPC over postMessage. Every method therefore lives
+ * in a single dictionary, and the proxy inside the iframe addresses exactly
+ * the same names.
  *
- * כללי כשל: פעולות כתיבה זורקות `MacroError` כשהן נכשלות, כדי שסקריפט ייעצר
- * במקום להמשיך על מסמך במצב לא צפוי. `command()` הגולמית מחזירה את התוצאה
- * ואינה זורקת — למי שרוצה לבדוק בעצמו.
+ * Failure rules: write operations throw a `MacroError` when they fail, so a
+ * script stops instead of continuing against a document in an unexpected
+ * state. The raw `command()` returns the outcome and does not throw — for
+ * scripts that want to check it themselves.
  */
+import { macroMessages } from '../messages.js';
 import type { MacroHost, MacroOutcome, SelectionSnapshot } from '../types.js';
 
-/** כשל של פעולת מאקרו. השם מאפשר לסקריפט להבחין בינו ובין TypeError שלו. */
+/** A macro operation failure. Named so a script can tell it apart from its own TypeError. */
 export class MacroError extends Error {
   readonly reason?: string;
   constructor(message: string, reason?: string) {
@@ -21,7 +25,7 @@ export class MacroError extends Error {
   }
 }
 
-/** תצלום בחירה בטוח למסירה ל-iframe (בלי היעד האטום של המנוע). */
+/** Selection snapshot that is safe to hand to the iframe (without the engine's opaque target). */
 export interface ScriptSelection {
   text: string;
   hasRange: boolean;
@@ -29,13 +33,13 @@ export interface ScriptSelection {
   empty: boolean;
 }
 
-/** מה שסקריפט מקבל בתור `api`. כל המתודות א-סינכרוניות. */
+/** What a script receives as `api`. Every method is async. */
 export interface MacroApi {
-  /** מריצה פקודה מקטלוג המנוע. מחזירה תוצאה ואינה זורקת. */
+  /** Runs a command from the engine catalog. Returns the outcome, never throws. */
   command(id: string, payload?: unknown): Promise<MacroOutcome>;
-  /** האם המנוע מכיר את הפקודה. */
+  /** Whether the engine recognizes the command. */
   hasCommand(id: string): Promise<boolean>;
-  /** מזהי הפקודות המוכרות. */
+  /** The known command ids. */
   commandIds(): Promise<readonly string[]>;
 
   insertText(text: string): Promise<void>;
@@ -45,10 +49,10 @@ export interface MacroApi {
   getSelection(): Promise<ScriptSelection>;
   getSelectionText(): Promise<string>;
   getDocumentText(): Promise<string>;
-  /** מחליפה את כל המופעים. מחזירה כמה הוחלפו. */
+  /** Replaces every occurrence. Returns how many were replaced. */
   replaceAll(query: string, replacement: string): Promise<number>;
 
-  /* סוכר לפקודות ללא payload מהקטלוג של SuperDoc. זורקות בכשל. */
+  /* Sugar for payload-less commands from the SuperDoc catalog. Throw on failure. */
   bold(): Promise<void>;
   italic(): Promise<void>;
   underline(): Promise<void>;
@@ -63,20 +67,20 @@ export interface MacroApi {
   undo(): Promise<void>;
   redo(): Promise<void>;
 
-  /** כותבת שורה ליומן הריצה (מוצג למשתמש, לא ל-console). */
+  /** Writes a line to the run log (shown to the user, not to the console). */
   log(...parts: unknown[]): Promise<void>;
 }
 
 export interface MacroApiOptions {
-  /** מקבלת כל שורת `api.log`. ברירת המחדל: console.info. */
+  /** Receives every `api.log` line. Default: console.info. */
   onLog?: (line: string) => void;
 }
 
 export interface MacroBridge {
   api: MacroApi;
-  /** מסלול ה-RPC: מפעילה מתודה לפי שם. זורקת על מתודה שאינה קיימת. */
+  /** The RPC path: invokes a method by name. Throws on an unknown method. */
   call(method: string, args: readonly unknown[]): Promise<unknown>;
-  /** מספר הקריאות שבוצעו עד כה. משמש לתקרת קריאות במריצים. */
+  /** Number of calls made so far. Used by the runners' call limit. */
   callCount(): number;
 }
 
@@ -87,7 +91,7 @@ function requireOk(outcome: MacroOutcome, action: string): void {
 }
 
 function asText(value: unknown, name: string): string {
-  if (typeof value !== 'string') throw new MacroError(`${name} חייב להיות מחרוזת`);
+  if (typeof value !== 'string') throw new MacroError(macroMessages().mustBeString(name));
   return value;
 }
 
@@ -100,12 +104,12 @@ function formatLogPart(part: unknown): string {
   }
 }
 
-/** בונה את ה-API מעל מארח. */
+/** Builds the API on top of a host. */
 export function createMacroApi(host: MacroHost, options: MacroApiOptions = {}): MacroBridge {
   const onLog = options.onLog ?? ((line: string) => console.info('[superdoc-macros]', line));
 
   const commandSugar = async (id: string): Promise<void> => {
-    requireOk(await host.commands.execute(id), `הפקודה ${id} נכשלה`);
+    requireOk(await host.commands.execute(id), macroMessages().commandFailed(id));
   };
 
   const api: MacroApi = {
@@ -114,15 +118,15 @@ export function createMacroApi(host: MacroHost, options: MacroApiOptions = {}): 
     commandIds: async () => host.commands.ids(),
 
     async insertText(text) {
-      requireOk(await host.insertText(asText(text, 'text')), 'הכנסת הטקסט נכשלה');
+      requireOk(await host.insertText(asText(text, 'text')), macroMessages().insertTextFailed);
     },
     async insertParagraph() {
-      requireOk(await host.insertText('\n'), 'הכנסת הפסקה נכשלה');
+      requireOk(await host.insertText('\n'), macroMessages().insertParagraphFailed);
     },
     async deleteBackward(count = 1) {
       const n = Math.max(0, Math.trunc(Number(count)));
       if (n === 0) return;
-      requireOk(await host.deleteBackward(n), 'המחיקה נכשלה');
+      requireOk(await host.deleteBackward(n), macroMessages().deleteFailed);
     },
 
     async getSelection() {
@@ -140,7 +144,7 @@ export function createMacroApi(host: MacroHost, options: MacroApiOptions = {}): 
     getDocumentText: () => host.getDocumentText(),
     async replaceAll(query, replacement) {
       const result = await host.replaceAll(asText(query, 'query'), asText(replacement, 'replacement'));
-      if (!result.ok) throw new MacroError(result.message ?? 'ההחלפה נכשלה');
+      if (!result.ok) throw new MacroError(result.message ?? macroMessages().replaceFailed);
       return result.replaced;
     },
 
@@ -171,7 +175,7 @@ export function createMacroApi(host: MacroHost, options: MacroApiOptions = {}): 
     async call(method, args) {
       const fn = methods[method];
       if (typeof fn !== 'function' || !Object.prototype.hasOwnProperty.call(api, method)) {
-        throw new MacroError(`מתודה לא מוכרת: ${String(method)}`);
+        throw new MacroError(macroMessages().unknownMethod(String(method)));
       }
       calls += 1;
       return fn.apply(api, args as unknown[]);

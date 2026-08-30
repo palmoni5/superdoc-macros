@@ -4,7 +4,7 @@ import { createEvalRunner } from '../src/scripting/eval-runner.js';
 import { createFakeHost } from './fake-host.js';
 
 describe('macro api', () => {
-  it('מריץ פקודות דרך המארח', async () => {
+  it('runs commands through the host', async () => {
     const host = createFakeHost();
     const { api } = createMacroApi(host);
 
@@ -18,7 +18,7 @@ describe('macro api', () => {
     ]);
   });
 
-  it('סוכר זורק על כשל פקודה, command גולמית אינה זורקת', async () => {
+  it('sugar throws on command failure, raw command() does not', async () => {
     const host = createFakeHost();
     host.failCommands.add('bold');
     const { api } = createMacroApi(host);
@@ -28,7 +28,7 @@ describe('macro api', () => {
     expect(outcome.ok).toBe(false);
   });
 
-  it('insertText ו-replaceAll פועלים על המסמך', async () => {
+  it('insertText and replaceAll act on the document', async () => {
     const host = createFakeHost();
     const { api } = createMacroApi(host);
 
@@ -39,7 +39,7 @@ describe('macro api', () => {
     expect(host.text).toBe('להתראות להתראות');
   });
 
-  it('call מנתב לפי שם ודוחה מתודה זרה', async () => {
+  it('call() routes by name and rejects foreign methods', async () => {
     const host = createFakeHost();
     const bridge = createMacroApi(host);
 
@@ -47,15 +47,15 @@ describe('macro api', () => {
     expect(host.text).toBe('אבג');
     expect(bridge.callCount()).toBe(1);
 
-    await expect(bridge.call('hasOwnProperty', [])).rejects.toThrow('מתודה לא מוכרת');
-    await expect(bridge.call('constructor', [])).rejects.toThrow('מתודה לא מוכרת');
+    await expect(bridge.call('hasOwnProperty', [])).rejects.toThrow('Unknown method');
+    await expect(bridge.call('constructor', [])).rejects.toThrow('Unknown method');
   });
 });
 
 describe('eval runner', () => {
   const runner = createEvalRunner();
 
-  it('מריץ סקריפט שקורא ל-API ומחזיר ערך', async () => {
+  it('runs a script that calls the API and returns a value', async () => {
     const host = createFakeHost();
     const bridge = createMacroApi(host);
 
@@ -72,20 +72,20 @@ describe('eval runner', () => {
     expect(host.text).toBe('בדיקה שנייה');
   });
 
-  it('שגיאת תחביר חוזרת ככשל ולא כזריקה', async () => {
+  it('a syntax error comes back as a failure, not a throw', async () => {
     const host = createFakeHost();
     const result = await runner.run('this is not js {{{', createMacroApi(host));
     expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.message).toContain('שגיאת תחביר');
+    if (!result.ok) expect(result.message).toContain('Macro syntax error');
   });
 
-  it('שגיאת ריצה של הסקריפט חוזרת ככשל', async () => {
+  it('a runtime error in the script comes back as a failure', async () => {
     const host = createFakeHost();
-    const result = await runner.run('throw new Error("נשבר")', createMacroApi(host));
-    expect(result).toEqual({ ok: false, reason: 'error', message: 'נשבר' });
+    const result = await runner.run('throw new Error("broken")', createMacroApi(host));
+    expect(result).toEqual({ ok: false, reason: 'error', message: 'broken' });
   });
 
-  it('אוכף תקרת קריאות API', async () => {
+  it('enforces the API call cap', async () => {
     const host = createFakeHost();
     const result = await runner.run(
       `for (let i = 0; i < 100; i += 1) await api.insertText('x');`,
@@ -94,11 +94,11 @@ describe('eval runner', () => {
     );
 
     expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.message).toContain('תקרת הקריאות');
+    if (!result.ok) expect(result.message).toContain('call limit');
     expect(host.text.length).toBe(10);
   });
 
-  it('עוצר בתום תקרת הזמן', async () => {
+  it('stops when the time cap expires', async () => {
     const host = createFakeHost();
     const result = await runner.run(
       `await new Promise((resolve) => setTimeout(resolve, 5000));`,

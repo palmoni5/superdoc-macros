@@ -1,36 +1,40 @@
 /**
- * קטעי טקסט (Snippets): תבניות שמוכנסות במיקום הסמן, עם משתני `{{...}}`.
+ * Text snippets: templates inserted at the caret, with `{{...}}` variables.
  *
- * משתנים מובנים: `{{date}}`, `{{time}}`, `{{datetime}}` (בעברית, לפי שעון
- * המערכת), `{{selection}}` (הטקסט המסומן ברגע ההרחבה). כל שם אחר נפתר מתוך
- * `variables` שנמסרו בקריאה; משתנה שאין לו ערך נשאר כמו שהוא בטקסט — כדי
- * שטעות כתיב תיראה במסמך ולא תיעלם בשקט.
+ * Built-in variables: `{{date}}`, `{{time}}`, `{{datetime}}` (system clock,
+ * formatted with the configured locale) and `{{selection}}` (the selected
+ * text at expansion time). Any other name resolves from the `variables`
+ * passed to the call; a variable with no value stays visible in the text —
+ * so a typo shows up in the document instead of vanishing silently.
  */
 import type { MacroHost, MacroOutcome, Snippet } from '../types.js';
 
 export interface RenderContext {
-  /** ערכים למשתנים מותאמים. */
+  /** Values for custom variables. */
   variables?: Readonly<Record<string, string>>;
-  /** הטקסט שיוצב ב-`{{selection}}`. */
+  /** The text substituted for `{{selection}}`. */
   selectionText?: string;
-  /** הזמן ל-`{{date}}`/`{{time}}`. ברירת מחדל: עכשיו. קיים בשביל בדיקות. */
+  /** The time for `{{date}}`/`{{time}}`. Default: now. Exists for tests. */
   now?: Date;
+  /** BCP-47 locale for date/time formatting. Default: the browser's. */
+  locale?: string;
 }
 
 const VARIABLE_PATTERN = /\{\{\s*([\p{L}\p{N}_-]+)\s*\}\}/gu;
 
 export function renderSnippet(text: string, context: RenderContext = {}): string {
   const now = context.now ?? new Date();
+  const locale = context.locale;
 
   return text.replace(VARIABLE_PATTERN, (whole, rawName: string) => {
     const name = rawName.toLowerCase();
     switch (name) {
       case 'date':
-        return now.toLocaleDateString('he-IL');
+        return now.toLocaleDateString(locale);
       case 'time':
-        return now.toLocaleTimeString('he-IL', { hour: '2-digit', minute: '2-digit' });
+        return now.toLocaleTimeString(locale, { hour: '2-digit', minute: '2-digit' });
       case 'datetime':
-        return `${now.toLocaleDateString('he-IL')} ${now.toLocaleTimeString('he-IL', { hour: '2-digit', minute: '2-digit' })}`;
+        return `${now.toLocaleDateString(locale)} ${now.toLocaleTimeString(locale, { hour: '2-digit', minute: '2-digit' })}`;
       case 'selection':
         return context.selectionText ?? '';
       default: {
@@ -41,7 +45,7 @@ export function renderSnippet(text: string, context: RenderContext = {}): string
   });
 }
 
-/** האם הקטע משתמש ב-`{{selection}}` — ואז ההרחבה צריכה לקרוא את הבחירה. */
+/** Whether the snippet uses `{{selection}}` — in which case expansion must read the selection. */
 export function usesSelection(text: string): boolean {
   return /\{\{\s*selection\s*\}\}/iu.test(text);
 }
@@ -49,15 +53,16 @@ export function usesSelection(text: string): boolean {
 export interface ExpandOptions {
   variables?: Readonly<Record<string, string>>;
   now?: Date;
+  locale?: string;
 }
 
-/** מרחיבה קטע במיקום הסמן. */
+/** Expands a snippet at the caret. */
 export async function expandSnippet(
   host: MacroHost,
   snippet: Pick<Snippet, 'text'>,
   options: ExpandOptions = {},
 ): Promise<MacroOutcome> {
-  // הבחירה נקראת רק כשנחוצה: חילוץ טקסט הבחירה עולה בביצועים במנוע.
+  // The selection is read only when needed: extracting its text has an engine cost.
   const selectionText = usesSelection(snippet.text)
     ? (await host.getSelection({ includeText: true })).text
     : undefined;
@@ -66,6 +71,7 @@ export async function expandSnippet(
     variables: options.variables,
     selectionText,
     now: options.now,
+    locale: options.locale,
   });
 
   return host.insertText(rendered);

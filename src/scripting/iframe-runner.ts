@@ -1,17 +1,21 @@
 /**
- * מריץ סקריפטים בארגז חול — iframe עם `sandbox="allow-scripts"` בלבד.
+ * Sandboxed script runner — an iframe with `sandbox="allow-scripts"` only.
  *
- * ה-iframe מקבל origin אטום: אין לו גישה ל-DOM של הדף, ל-localStorage, ל-cookies
- * או לרשת עם אישורי המשתמש. הדרך היחידה שלו לגעת במסמך היא RPC על postMessage
- * אל המתודות של `MacroApi` — כל קריאה עוברת דרך `bridge.call`, שאוכף רשימת
- * מתודות סגורה ותקרת קריאות.
+ * The iframe gets an opaque origin: no access to the page's DOM, to
+ * localStorage, to cookies, or to the network with the user's credentials.
+ * Its only way to touch the document is RPC over postMessage to the
+ * `MacroApi` methods — every call goes through `bridge.call`, which enforces
+ * a closed method list and a call cap.
  *
- * תקרת הזמן כאן אמיתית: בתום הזמן ה-iframe מוסר מה-DOM, וזה הורג גם לולאה
- * סינכרונית אינסופית — היא רצה ב-event loop של ה-iframe, לא של הדף.
+ * The time cap here is real: when it expires the iframe is removed from the
+ * DOM, which also kills an infinite synchronous loop — it runs on the
+ * iframe's event loop, not the page's.
  *
- * ערכי החזרה והארגומנטים חוצים גבול structured-clone; ה-API כבר בנוי כך שכל
- * מה שהוא מחזיר JSON-safe (ראו `ScriptSelection`).
+ * Return values and arguments cross a structured-clone boundary; the API is
+ * already shaped so everything it returns is JSON-safe (see
+ * `ScriptSelection`).
  */
+import { macroMessages } from '../messages.js';
 import type { MacroBridge } from './macro-api.js';
 import { limitCalls } from './eval-runner.js';
 import {
@@ -22,7 +26,7 @@ import {
   type MacroRunResult,
 } from './runner.js';
 
-/** סימון ההודעות של הפרוטוקול, כדי לא להתנגש בהודעות אחרות בדף. */
+/** Protocol marker, so the messages cannot collide with others on the page. */
 export const PROTOCOL_MARK = '__otzariaMacro' as const;
 
 export type SandboxMessage =
@@ -35,7 +39,7 @@ export type HostMessage =
   | { [PROTOCOL_MARK]: true; kind: 'run'; source: string }
   | { [PROTOCOL_MARK]: true; kind: 'result'; id: number; ok: boolean; value?: unknown; message?: string };
 
-/** האם הודעה שייכת לפרוטוקול. חשופה לבדיקות. */
+/** Whether a message belongs to the protocol. Exposed for tests. */
 export function isProtocolMessage(data: unknown): data is SandboxMessage {
   return (
     typeof data === 'object' &&
@@ -46,8 +50,9 @@ export function isProtocolMessage(data: unknown): data is SandboxMessage {
 }
 
 /**
- * הקוד שרץ בתוך ה-iframe. מחרוזת ולא פונקציה מוסרלת — כדי שה-build לא ישנה
- * אותו (minify של שמות היה שובר את הפרוטוקול).
+ * The code that runs inside the iframe. A string rather than a serialized
+ * function, so the build cannot touch it (minifying names would break the
+ * protocol).
  */
 export const SANDBOX_BOOTSTRAP = `
 'use strict';
@@ -64,7 +69,7 @@ export const SANDBOX_BOOTSTRAP = `
   var api = new Proxy({}, {
     get: function (_target, method) {
       if (typeof method !== 'string') return undefined;
-      if (method === 'then') return undefined; // ש-await api לא יתפרש כ-thenable
+      if (method === 'then') return undefined; // so "await api" is not treated as a thenable
       return function () {
         var args = Array.prototype.slice.call(arguments);
         return new Promise(function (resolve, reject) {
@@ -112,7 +117,7 @@ export const SANDBOX_BOOTSTRAP = `
 })();
 `;
 
-/** ערך בטוח למסירה חזרה ל-iframe (structured clone עלול להיכשל על אובייקטי מנוע). */
+/** A value safe to hand back to the iframe (structured clone can fail on engine objects). */
 function toCloneSafe(value: unknown): unknown {
   if (value === undefined || value === null) return value;
   try {
@@ -147,7 +152,7 @@ export function createIframeRunner(doc: Document = document): MacroRunner {
         };
 
         const onMessage = (event: MessageEvent): void => {
-          // רק הודעות מה-iframe הזה: דף יכול להריץ כמה מאקרו במקביל.
+          // Only messages from this iframe: a page may run several macros at once.
           if (event.source !== iframe.contentWindow) return;
           const data: unknown = event.data;
           if (!isProtocolMessage(data)) return;
@@ -191,7 +196,7 @@ export function createIframeRunner(doc: Document = document): MacroRunner {
 
         addEventListener('message', onMessage);
         timer = setTimeout(
-          () => finish({ ok: false, reason: 'timeout', message: `המאקרו לא הסתיים תוך ${timeoutMs / 1000} שניות ונעצר` }),
+          () => finish({ ok: false, reason: 'timeout', message: macroMessages().timedOut(timeoutMs / 1000) }),
           timeoutMs,
         );
         doc.body.appendChild(iframe);

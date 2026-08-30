@@ -1,27 +1,30 @@
 /**
- * מקליט מאקרו בסגנון Word: מקליט **פקודות** והקלדה, לא מיקומי סמן.
+ * A Word-style macro recorder: records **commands** and typing, not caret
+ * positions.
  *
- * הבחירה הזאת מכוונת. הקלטת צעדי ProseMirror גולמיים (עם מיקומים אבסולוטיים)
- * נשברת ברגע שהמסמך שונה ממה שהיה בזמן ההקלטה; הקלטת פקודות ("bold",
- * "bullet-list", הקלדת "בס\"ד") מתנהגת כמו המקליט של Word — הפעולות חלות
- * במקום שבו הסמן נמצא בזמן הניגון. זה גם מה שהופך הקלטה לניתנת לשמירה
- * ולשיתוף: הצעדים JSON בלבד.
+ * That choice is deliberate. Recording raw ProseMirror steps (with absolute
+ * positions) breaks the moment the document differs from what it was at
+ * recording time; recording commands ("bold", "bullet-list", typing a
+ * greeting) behaves like Word's recorder — the actions apply wherever the
+ * caret is at replay time. It is also what makes a recording saveable and
+ * shareable: the steps are plain JSON.
  *
- * מה לא נקלט: תנועת סמן ובחירה בעכבר. כמו ב-Word, מאקרו מוקלט פועל מהמקום
- * שבו הסמן עומד כשמריצים אותו.
+ * What is not recorded: caret movement and mouse selection. As in Word, a
+ * recorded macro acts from wherever the caret stands when it runs.
  */
+import { macroMessages } from '../messages.js';
 import type { MacroHost, MacroOutcome, MacroStep, TextInputEvent } from '../types.js';
 
 export interface RecorderOptions {
-  /** סינון פקודות. ברירת המחדל מקליטה הכול חוץ מ-undo/redo. */
+  /** Command filter. The default records everything except undo/redo. */
   shouldRecordCommand?: (id: string) => boolean;
-  /** תקרת צעדים להקלטה אחת, נגד הקלטה שנשכחה פתוחה. */
+  /** Step cap per recording, against a recording left running by mistake. */
   maxSteps?: number;
 }
 
 const DEFAULT_MAX_STEPS = 5_000;
 
-/** undo/redo בזמן הקלטה מתקנים את ההקלטה עצמה — ניגון שלהם היה משחזר גם את הטעות. */
+/** Undo/redo during recording fix the recording itself — replaying them would replay the mistake too. */
 function defaultShouldRecord(id: string): boolean {
   return id !== 'undo' && id !== 'redo';
 }
@@ -59,7 +62,7 @@ export class MacroRecorder {
     ];
   }
 
-  /** עוצרת ומחזירה את הצעדים. ריקה כשלא הוקלט דבר. */
+  /** Stops and returns the steps. Empty when nothing was recorded. */
   stop(): MacroStep[] {
     if (!this.active) return [];
     this.teardown();
@@ -68,7 +71,7 @@ export class MacroRecorder {
     return recorded;
   }
 
-  /** עוצרת וזורקת את מה שהוקלט. */
+  /** Stops and discards whatever was recorded. */
   cancel(): void {
     if (!this.active) return;
     this.teardown();
@@ -98,7 +101,7 @@ export class MacroRecorder {
 
     switch (event.kind) {
       case 'insert-text': {
-        // הקשות רצופות מתלכדות לצעד אחד — גם קריא יותר וגם ניגון מהיר יותר.
+        // Consecutive keystrokes coalesce into one step — more readable, faster to replay.
         if (last?.type === 'insert-text') {
           last.text += event.text;
           return;
@@ -137,15 +140,15 @@ export interface ReplayFailure {
 
 export interface ReplayResult {
   ok: boolean;
-  /** כמה צעדים הושלמו בהצלחה. */
+  /** How many steps completed successfully. */
   completed: number;
   failures: ReplayFailure[];
 }
 
 export interface ReplayOptions {
-  /** עצירה בכשל הראשון. ברירת מחדל: true — מאקרו שנכשל באמצע לא ממשיך לרוץ עיוור. */
+  /** Stop at the first failure. Default: true — a macro that failed midway must not keep running blind. */
   stopOnError?: boolean;
-  /** נקראת לפני כל צעד; מאפשרת מד התקדמות. */
+  /** Called before each step; enables a progress indicator. */
   onStep?: (index: number, step: MacroStep) => void;
 }
 
@@ -160,8 +163,8 @@ async function runStep(host: MacroHost, step: MacroStep): Promise<MacroOutcome> 
     case 'delete-backward':
       return host.deleteBackward(step.count);
     case 'delete-forward':
-      // המנוע אינו חושף מחיקה קדימה נפרדת; מדווח ככשל מפורש ולא מדלג בשקט.
-      return { ok: false, message: 'מחיקה קדימה אינה נתמכת בניגון', reason: 'unsupported-step' };
+      // The engine exposes no separate forward deletion; report an explicit failure rather than skipping silently.
+      return { ok: false, message: macroMessages().deleteForwardUnsupported, reason: 'unsupported-step' };
   }
 }
 

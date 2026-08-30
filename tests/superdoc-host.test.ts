@@ -1,6 +1,7 @@
 /**
- * בדיקות למתאם SuperDoc עם כפיל מבני של המנוע — אותם משטחים ש-otzaria-word-editor
- * צורך (ui.commands / activeEditor.doc / ui.search / activeEditor.view).
+ * Tests for the SuperDoc adapter, against a structural engine double — the
+ * same surfaces otzaria-word-editor consumes (ui.commands / activeEditor.doc
+ * / ui.search / activeEditor.view).
  */
 import { describe, expect, it } from 'vitest';
 import { createSuperdocHost, type SuperdocLike } from '../src/host/superdoc-host.js';
@@ -77,7 +78,7 @@ function createFakeSuperdoc(): FakeEngine {
 }
 
 describe('createSuperdocHost', () => {
-  it('מריץ פקודה ומנרמל ניתוב שנדחה', async () => {
+  it('runs a command and normalizes a rejected routing', async () => {
     const engine = createFakeSuperdoc();
     const host = createSuperdocHost({ superdoc: engine });
 
@@ -92,7 +93,7 @@ describe('createSuperdocHost', () => {
     if (!unknown.ok) expect(unknown.reason).toBe('unknown-command');
   });
 
-  it('insertText מוסר את יעד הבחירה למנוע', async () => {
+  it('insertText hands the selection target to the engine', async () => {
     const engine = createFakeSuperdoc();
     const host = createSuperdocHost({ superdoc: engine });
 
@@ -102,7 +103,7 @@ describe('createSuperdocHost', () => {
     expect(engine.log).toContain('insert:אבג:targeted');
   });
 
-  it('deleteBackward עובר דרך ProseMirror', async () => {
+  it('deleteBackward goes through ProseMirror', async () => {
     const engine = createFakeSuperdoc();
     const host = createSuperdocHost({ superdoc: engine });
 
@@ -112,7 +113,7 @@ describe('createSuperdocHost', () => {
     expect(engine.log).toEqual(expect.arrayContaining(['pm:delete:2-5', 'pm:dispatch']));
   });
 
-  it('replaceAll סופר התאמות ומחליף דרך החיפוש', async () => {
+  it('replaceAll counts matches and replaces through search', async () => {
     const engine = createFakeSuperdoc();
     const host = createSuperdocHost({ superdoc: engine });
     await host.insertText('שלום עולם שלום');
@@ -123,14 +124,14 @@ describe('createSuperdocHost', () => {
     expect(engine.log).toContain('search:replaceAll');
   });
 
-  it('תצפית הפקודות רואה הרצות מכל מקור ו-dispose מחזיר את המקור', async () => {
+  it('command observation sees executions from any source, and dispose restores the original', async () => {
     const engine = createFakeSuperdoc();
     const host = createSuperdocHost({ superdoc: engine });
 
     const seen: string[] = [];
     host.onCommand((id) => seen.push(id));
 
-    // הרצה "מהממשק" — ישירות על המנוע, לא דרך המארח.
+    // A "UI-driven" execution — directly on the engine, not through the host.
     await engine.ui!.commands!.executeAsync('bold');
     expect(seen).toEqual(['bold']);
 
@@ -139,7 +140,7 @@ describe('createSuperdocHost', () => {
     expect(seen).toEqual(['bold']);
   });
 
-  it('נכשל סגור כשאין מסמך', async () => {
+  it('fails closed when there is no document', async () => {
     const host = createSuperdocHost({ superdoc: {} });
 
     expect((await host.commands.execute('bold')).ok).toBe(false);

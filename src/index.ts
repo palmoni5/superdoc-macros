@@ -11,6 +11,13 @@ export type {
 
 export { MacroKit, type MacroKitOptions } from './manager.js';
 
+export {
+  ENGLISH_MESSAGES,
+  HEBREW_MESSAGES,
+  setMacroMessages,
+  type MacroMessages,
+} from './messages.js';
+
 export { createSuperdocHost, type SuperdocHostOptions, type SuperdocLike, type SuperdocMacroHost } from './host/superdoc-host.js';
 
 export { createMacroApi, MacroError, type MacroApi, type MacroBridge, type ScriptSelection } from './scripting/macro-api.js';
