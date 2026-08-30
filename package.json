@@ -1,7 +1,7 @@
 {
-  "name": "otzaria-macros",
+  "name": "superdoc-macros",
   "version": "0.1.0",
-  "description": "ערכת מאקרו לעורכים מבוססי SuperDoc: סקריפטים בארגז חול, מקליט מאקרו בסגנון Word, וקטעי טקסט (Snippets) עם השלמה אוטומטית. נבנה עבור otzaria-word-editor.",
+  "description": "Macro toolkit for SuperDoc-based editors: sandboxed scripted macros, a Word-style macro recorder, and snippets with auto-text expansion.",
   "license": "MIT",
   "type": "module",
   "main": "./dist/index.js",
@@ -25,7 +25,7 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/palmoni5/otzaria-macros.git"
+    "url": "git+https://github.com/palmoni5/superdoc-macros.git"
   },
   "keywords": [
     "superdoc",

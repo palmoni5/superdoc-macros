@@ -102,7 +102,7 @@ function formatLogPart(part: unknown): string {
 
 /** בונה את ה-API מעל מארח. */
 export function createMacroApi(host: MacroHost, options: MacroApiOptions = {}): MacroBridge {
-  const onLog = options.onLog ?? ((line: string) => console.info('[otzaria-macros]', line));
+  const onLog = options.onLog ?? ((line: string) => console.info('[superdoc-macros]', line));
 
   const commandSugar = async (id: string): Promise<void> => {
     requireOk(await host.commands.execute(id), `הפקודה ${id} נכשלה`);

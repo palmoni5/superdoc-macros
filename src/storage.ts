@@ -42,7 +42,7 @@ export function parsePersistedState(json: string): PersistedMacroState | null {
   }
 }
 
-export const DEFAULT_STORAGE_KEY = 'otzaria-macros:v1';
+export const DEFAULT_STORAGE_KEY = 'superdoc-macros:v1';
 
 /** localStorage עם הגנות: גישה חסומה או מלאה אינה מפילה את הערכה. */
 export function createLocalStorage(
@@ -71,7 +71,7 @@ export function createLocalStorage(
       try {
         backing()?.setItem(key, JSON.stringify(state));
       } catch (error) {
-        console.warn('[otzaria-macros] שמירת המאקרו נכשלה', error);
+        console.warn('[superdoc-macros] שמירת המאקרו נכשלה', error);
       }
     },
   };

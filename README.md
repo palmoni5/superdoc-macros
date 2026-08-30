@@ -1,6 +1,6 @@
-# otzaria-macros
+# superdoc-macros
 
-ערכת מאקרו לעורכים מבוססי **SuperDoc v2** — נבנתה עבור [otzaria-word-editor](https://github.com/Y-PLONI/otzaria-word-editor), אך אינה תלויה בו (ואף לא בחבילת superdoc עצמה: החיבור למנוע מבני, דרך המשטחים הציבוריים שלו).
+ערכת מאקרו לעורכים מבוססי **SuperDoc v2**. נכתבה במקור עבור [otzaria-word-editor](https://github.com/Y-PLONI/otzaria-word-editor), אך כללית לחלוטין: אין תלות בו ואף לא בחבילת superdoc עצמה (החיבור למנוע מבני, דרך המשטחים הציבוריים שלו), והליבה עובדת מול כל עורך שמממש ממשק `MacroHost` קטן.
 
 שלוש יכולות, בדומה למאקרו של Word:
 
@@ -17,19 +17,19 @@
 ## התקנה
 
 ```bash
-npm install otzaria-macros
+npm install superdoc-macros
 ```
 
 או ישירות מגיטהאב (עד הפרסום ב-npm):
 
 ```bash
-npm install github:palmoni5/otzaria-macros
+npm install github:palmoni5/superdoc-macros
 ```
 
 ## התחלה מהירה (עם SuperDoc)
 
 ```ts
-import { MacroKit, createSuperdocHost } from 'otzaria-macros';
+import { MacroKit, createSuperdocHost } from 'superdoc-macros';
 
 // superdoc — מופע SuperDoc מוכן (אחרי onReady); container — האלמנט שהמסמך מרונדר בו.
 const host = createSuperdocHost({ superdoc, container });
@@ -120,7 +120,7 @@ await kit.expandSnippet(id);   // או הרחבה יזומה / דרך הקיצו
 ## שמירה, ייבוא וייצוא
 
 ```ts
-import { createLocalStorage } from 'otzaria-macros';
+import { createLocalStorage } from 'superdoc-macros';
 
 const kit = new MacroKit({ host, storage: createLocalStorage('my-key') });
 

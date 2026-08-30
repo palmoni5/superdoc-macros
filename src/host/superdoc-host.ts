@@ -143,7 +143,7 @@ export function createSuperdocHost(options: SuperdocHostOptions): SuperdocMacroH
         try {
           listener(id, payload);
         } catch (error) {
-          console.warn('[otzaria-macros] מאזין פקודות זרק', error);
+          console.warn('[superdoc-macros] מאזין פקודות זרק', error);
         }
       }
       return originalExecuteAsync.call(wrapped, id, payload);
@@ -178,7 +178,7 @@ export function createSuperdocHost(options: SuperdocHostOptions): SuperdocMacroH
       try {
         listener(mapped);
       } catch (error) {
-        console.warn('[otzaria-macros] מאזין הקלדה זרק', error);
+        console.warn('[superdoc-macros] מאזין הקלדה זרק', error);
       }
     }
   };
