@@ -1,0 +1,44 @@
+{
+  "name": "otzaria-macros",
+  "version": "0.1.0",
+  "description": "ערכת מאקרו לעורכים מבוססי SuperDoc: סקריפטים בארגז חול, מקליט מאקרו בסגנון Word, וקטעי טקסט (Snippets) עם השלמה אוטומטית. נבנה עבור otzaria-word-editor.",
+  "license": "MIT",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "prepare": "npm run build"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/palmoni5/otzaria-macros.git"
+  },
+  "keywords": [
+    "superdoc",
+    "macros",
+    "macro-recorder",
+    "snippets",
+    "autotext",
+    "docx",
+    "editor",
+    "otzaria"
+  ],
+  "devDependencies": {
+    "typescript": "^5.7.2",
+    "vitest": "^3.2.4"
+  }
+}
