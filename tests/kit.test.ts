@@ -58,6 +58,19 @@ describe('MacroKit — הקלטה וניגון', () => {
     expect(host.executed).toEqual([{ id: 'bold', payload: undefined }]);
   });
 
+  it('updateRecording משנה שם וקיצור, ומחיקת קיצור מסירה את השדה', async () => {
+    const { kit, host } = createKit();
+    kit.startRecording();
+    await host.typeText('א');
+    const recording = kit.stopRecording('זמני', 'Ctrl+Alt+9')!;
+
+    const renamed = kit.updateRecording({ id: recording.id, name: 'קבוע', shortcut: '' });
+
+    expect(renamed?.name).toBe('קבוע');
+    expect(renamed?.shortcut).toBeUndefined();
+    expect(kit.updateRecording({ id: 'אין-כזה', name: 'x' })).toBeNull();
+  });
+
   it('הקלטה ריקה אינה נשמרת', () => {
     const { kit } = createKit();
     kit.startRecording();

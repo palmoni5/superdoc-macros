@@ -162,6 +162,19 @@ export class MacroKit {
     this.persist();
   }
 
+  /** עדכון שם או קיצור של הקלטה קיימת. `null` כשההקלטה לא נמצאה. */
+  updateRecording(input: { id: string; name?: string; shortcut?: string }): RecordedMacro | null {
+    const recording = this.state.recordings.find((entry) => entry.id === input.id);
+    if (!recording) return null;
+    if (input.name !== undefined) recording.name = input.name;
+    if (input.shortcut !== undefined) {
+      if (input.shortcut) recording.shortcut = input.shortcut;
+      else delete recording.shortcut;
+    }
+    this.persist();
+    return recording;
+  }
+
   async replayRecording(id: string, options?: ReplayOptions): Promise<ReplayResult> {
     const recording = this.state.recordings.find((entry) => entry.id === id);
     if (!recording) return { ok: false, completed: 0, failures: [{ stepIndex: -1, step: { type: 'insert-text', text: '' }, message: 'ההקלטה לא נמצאה' }] };
