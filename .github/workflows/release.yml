@@ -1,0 +1,65 @@
+# שחרור אוטומטי: כל דחיפה ל-main שמעלה את הגרסה ב-package.json מפרסמת
+# ל-npm ויוצרת GitHub Release עם תג v<version> — בלי אף צעד ידני.
+#
+# הכול ב-job אחד ובכוונה: Release שנוצר מ-GITHUB_TOKEN אינו מפעיל workflows
+# אחרים (הגנת הרקורסיה של GitHub), ולכן פרסום ב-workflow נפרד שמאזין
+# ל-release לא היה רץ לעולם במסלול האוטומטי.
+#
+# דרישה חד-פעמית: secret בשם NPM_TOKEN (טוקן Automation מ-npmjs.com).
+# גרסה שכבר קיימת ב-npm פשוט מדלגת — דחיפות רגילות בלי העלאת גרסה ירוקות.
+name: Release
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # יצירת ה-Release והתג
+      id-token: write # provenance של npm
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          registry-url: https://registry.npmjs.org
+
+      - name: Check if version is new
+        id: version
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          if npm view "superdoc-macros@$VERSION" version >/dev/null 2>&1; then
+            echo "new=false" >> "$GITHUB_OUTPUT"
+            echo "v$VERSION already on npm — nothing to release."
+          else
+            echo "new=true" >> "$GITHUB_OUTPUT"
+            echo "v$VERSION is new — releasing."
+          fi
+
+      - if: steps.version.outputs.new == 'true'
+        run: npm ci
+
+      - if: steps.version.outputs.new == 'true'
+        run: npm run typecheck
+
+      - if: steps.version.outputs.new == 'true'
+        run: npm test
+
+      - if: steps.version.outputs.new == 'true'
+        name: Publish to npm
+        run: npm publish --provenance --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      # אחרי הפרסום ולא לפניו: אם הפרסום נכשל, לא נשאר Release שמצביע על
+      # גרסה שאינה קיימת ב-npm.
+      - if: steps.version.outputs.new == 'true'
+        name: Create GitHub Release
+        run: gh release create "v$VERSION" --title "v$VERSION" --generate-notes
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.version.outputs.version }}

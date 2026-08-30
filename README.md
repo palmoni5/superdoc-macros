@@ -149,6 +149,9 @@ npm test        # vitest — 43 בדיקות
 npm run build   # tsc ⟵ dist/
 ```
 
+**שחרור גרסה:** מעלים את `version` ב-package.json ודוחפים ל-main — ה-workflow
+(‎.github/workflows/release.yml) מפרסם ל-npm ויוצר GitHub Release אוטומטית.
+
 ## רישיון
 
 MIT
