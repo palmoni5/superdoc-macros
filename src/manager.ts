@@ -14,7 +14,15 @@ import type { MacroRunner, MacroRunOptions, MacroRunResult } from './scripting/r
 import { MacroRecorder, replayMacro, type ReplayOptions, type ReplayResult } from './recorder/recorder.js';
 import { AutoText, type AutoTextOptions } from './snippets/autotext.js';
 import { expandSnippet, type ExpandOptions } from './snippets/snippets.js';
-import { bindShortcuts, type ShortcutBinding, type ShortcutTarget } from './shortcuts.js';
+import {
+  bindShortcuts,
+  hasBindingModifier,
+  parseShortcut,
+  shortcutSignatures,
+  type ShortcutBinding,
+  type ShortcutTarget,
+} from './shortcuts.js';
+import { MacroError } from './scripting/macro-api.js';
 import { createLocalStorage, emptyState, parsePersistedState, type MacroStorage, type PersistedMacroState } from './storage.js';
 import { macroMessages } from './messages.js';
 import type { MacroHost, MacroStep, RecordedMacro, SavedScript, Snippet } from './types.js';
@@ -35,7 +43,16 @@ export interface MacroKitOptions {
   autoText?: Omit<AutoTextOptions, 'onExpand' | 'onError'> & AutoTextOptions;
   /** Run log for `api.log`. */
   onLog?: MacroApiOptions['onLog'];
+  /**
+   * Shortcuts the host already owns (e.g. its ribbon registry). A saved
+   * binding that collides with any of these is rejected — otherwise the
+   * macro binding, attached in the capture phase, would silently shadow an
+   * editor shortcut. Unparseable entries are ignored.
+   */
+  reservedShortcuts?: readonly string[];
 }
+
+export type ShortcutValidation = { ok: true } | { ok: false; message: string };
 
 let idCounter = 0;
 
@@ -58,6 +75,7 @@ export class MacroKit {
   private state: PersistedMacroState;
   private readonly recorder: MacroRecorder;
   private readonly autoText: AutoText;
+  private readonly reservedSignatures: ReadonlySet<string>;
   private running = false;
 
   constructor(options: MacroKitOptions) {
@@ -73,6 +91,62 @@ export class MacroKit {
     this.state = this.storage.load() ?? emptyState();
     this.recorder = new MacroRecorder(this.host);
     this.autoText = new AutoText(this.host, () => this.state.snippets, options.autoText);
+
+    const reserved = new Set<string>();
+    for (const shortcut of options.reservedShortcuts ?? []) {
+      const parsed = parseShortcut(shortcut);
+      if (parsed) for (const signature of shortcutSignatures(parsed)) reserved.add(signature);
+    }
+    this.reservedSignatures = reserved;
+  }
+
+  /* ---------- Shortcut validation ---------- */
+
+  /**
+   * Whether a shortcut is acceptable for a saved binding: parseable, carries
+   * a real modifier, not reserved by the host, and not already used by
+   * another saved item (`excludeId` skips the item being edited). Empty or
+   * undefined means "no shortcut" and is fine. The save paths enforce this;
+   * UIs call it directly to show the message before saving.
+   */
+  validateShortcut(shortcut: string | undefined, excludeId?: string): ShortcutValidation {
+    const trimmed = shortcut?.trim();
+    if (!trimmed) return { ok: true };
+
+    const parsed = parseShortcut(trimmed);
+    if (!parsed) return { ok: false, message: macroMessages().shortcutInvalid };
+    if (!hasBindingModifier(parsed)) return { ok: false, message: macroMessages().shortcutNeedsModifier };
+
+    const signatures = shortcutSignatures(parsed);
+    if (signatures.some((signature) => this.reservedSignatures.has(signature))) {
+      return { ok: false, message: macroMessages().shortcutReserved };
+    }
+
+    const owner = this.findShortcutOwner(signatures, excludeId);
+    if (owner) return { ok: false, message: macroMessages().shortcutTaken(owner) };
+    return { ok: true };
+  }
+
+  private findShortcutOwner(signatures: readonly string[], excludeId?: string): string | null {
+    const items: ReadonlyArray<{ id: string; name: string; shortcut?: string }> = [
+      ...this.state.scripts,
+      ...this.state.recordings,
+      ...this.state.snippets,
+    ];
+    for (const item of items) {
+      if (!item.shortcut || item.id === excludeId) continue;
+      const parsed = parseShortcut(item.shortcut);
+      if (!parsed) continue;
+      const existing = shortcutSignatures(parsed);
+      if (existing.some((signature) => signatures.includes(signature))) return item.name;
+    }
+    return null;
+  }
+
+  /** Throws a MacroError when the shortcut is unacceptable. The save paths call this. */
+  private requireValidShortcut(shortcut: string | undefined, excludeId?: string): void {
+    const validation = this.validateShortcut(shortcut, excludeId);
+    if (!validation.ok) throw new MacroError(validation.message, 'invalid-shortcut');
   }
 
   /* ---------- Scripts ---------- */
@@ -82,6 +156,7 @@ export class MacroKit {
   }
 
   saveScript(input: { id?: string; name: string; source: string; shortcut?: string }): SavedScript {
+    this.requireValidShortcut(input.shortcut, input.id);
     const script: SavedScript = {
       id: input.id ?? newId(),
       name: input.name,
@@ -135,6 +210,7 @@ export class MacroKit {
 
   /** Stops and saves. `null` when no step was recorded — there is nothing to save. */
   stopRecording(name: string, shortcut?: string): RecordedMacro | null {
+    this.requireValidShortcut(shortcut);
     const steps: MacroStep[] = this.recorder.stop();
     if (steps.length === 0) return null;
 
@@ -168,6 +244,7 @@ export class MacroKit {
   updateRecording(input: { id: string; name?: string; shortcut?: string }): RecordedMacro | null {
     const recording = this.state.recordings.find((entry) => entry.id === input.id);
     if (!recording) return null;
+    if (input.shortcut !== undefined) this.requireValidShortcut(input.shortcut, input.id);
     if (input.name !== undefined) recording.name = input.name;
     if (input.shortcut !== undefined) {
       if (input.shortcut) recording.shortcut = input.shortcut;
@@ -207,6 +284,7 @@ export class MacroKit {
   }
 
   saveSnippet(input: { id?: string; name: string; text: string; trigger?: string; shortcut?: string }): Snippet {
+    this.requireValidShortcut(input.shortcut, input.id);
     const snippet: Snippet = {
       id: input.id ?? newId(),
       name: input.name,

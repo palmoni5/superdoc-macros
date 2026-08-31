@@ -9,7 +9,7 @@ export type {
   TextInputEvent,
 } from './types.js';
 
-export { MacroKit, type MacroKitOptions } from './manager.js';
+export { MacroKit, type MacroKitOptions, type ShortcutValidation } from './manager.js';
 
 export {
   ENGLISH_MESSAGES,
@@ -30,7 +30,16 @@ export { MacroRecorder, replayMacro, type RecorderOptions, type ReplayOptions, t
 export { renderSnippet, expandSnippet, usesSelection, type ExpandOptions, type RenderContext } from './snippets/snippets.js';
 export { AutoText, type AutoTextOptions } from './snippets/autotext.js';
 
-export { parseShortcut, eventMatches, bindShortcuts, type ParsedShortcut, type ShortcutBinding, type ShortcutTarget } from './shortcuts.js';
+export {
+  parseShortcut,
+  eventMatches,
+  bindShortcuts,
+  shortcutSignatures,
+  hasBindingModifier,
+  type ParsedShortcut,
+  type ShortcutBinding,
+  type ShortcutTarget,
+} from './shortcuts.js';
 
 export {
   createLocalStorage,
@@ -38,6 +47,7 @@ export {
   emptyState,
   parsePersistedState,
   DEFAULT_STORAGE_KEY,
+  IMPORT_LIMITS,
   type MacroStorage,
   type PersistedMacroState,
 } from './storage.js';

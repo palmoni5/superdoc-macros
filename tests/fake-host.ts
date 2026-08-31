@@ -21,6 +21,8 @@ export interface FakeHost extends MacroHost {
   typeText(text: string): Promise<void>;
   /** Simulates the user pressing Backspace. */
   typeBackspace(): Promise<void>;
+  /** Simulates the user pressing Delete. */
+  typeDeleteForward(): Promise<void>;
   /** Simulates a UI-driven command (e.g. a ribbon button) — same path. */
   uiCommand(id: string, payload?: unknown): Promise<MacroOutcome>;
 }
@@ -69,6 +71,12 @@ export function createFakeHost(knownCommands: readonly string[] = DEFAULT_COMMAN
       const from = Math.max(0, host.cursor - count);
       host.text = host.text.slice(0, from) + host.text.slice(host.cursor);
       host.cursor = from;
+      return { ok: true };
+    },
+
+    async deleteForward(count): Promise<MacroOutcome> {
+      const to = Math.min(host.text.length, host.cursor + count);
+      host.text = host.text.slice(0, host.cursor) + host.text.slice(to);
       return { ok: true };
     },
 
@@ -123,6 +131,11 @@ export function createFakeHost(knownCommands: readonly string[] = DEFAULT_COMMAN
     async typeBackspace() {
       emitInput({ kind: 'delete-backward' });
       await host.deleteBackward(1);
+    },
+
+    async typeDeleteForward() {
+      emitInput({ kind: 'delete-forward' });
+      await host.deleteForward(1);
     },
 
     uiCommand(id, payload) {

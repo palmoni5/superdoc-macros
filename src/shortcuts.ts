@@ -89,6 +89,26 @@ export function eventMatches(parsed: ParsedShortcut, event: KeyEventLike): boole
   );
 }
 
+/**
+ * Comparable signatures for collision checks. `Mod` matches either Ctrl or
+ * Meta at runtime, so it expands to both — a `Mod+K` binding collides with
+ * `Ctrl+K` and with `Meta+K`.
+ */
+export function shortcutSignatures(parsed: ParsedShortcut): string[] {
+  const suffix = `${parsed.alt ? 'alt+' : ''}${parsed.shift ? 'shift+' : ''}${parsed.key}`;
+  if (parsed.mod) return [`ctrl+${suffix}`, `meta+${suffix}`];
+  return [`${parsed.ctrl ? 'ctrl+' : ''}${parsed.meta ? 'meta+' : ''}${suffix}`];
+}
+
+/**
+ * Whether the shortcut is acceptable as a *saved binding*: it must carry a
+ * real modifier (Ctrl/Alt/Meta/Mod). A bare letter would fire on ordinary
+ * typing, and Shift alone is just an uppercase letter.
+ */
+export function hasBindingModifier(parsed: ParsedShortcut): boolean {
+  return parsed.ctrl || parsed.alt || parsed.meta || parsed.mod;
+}
+
 export interface ShortcutBinding {
   shortcut: string;
   run(): void | Promise<unknown>;

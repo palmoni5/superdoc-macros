@@ -12,7 +12,6 @@
  * What is not recorded: caret movement and mouse selection. As in Word, a
  * recorded macro acts from wherever the caret stands when it runs.
  */
-import { macroMessages } from '../messages.js';
 import type { MacroHost, MacroOutcome, MacroStep, TextInputEvent } from '../types.js';
 
 export interface RecorderOptions {
@@ -163,8 +162,7 @@ async function runStep(host: MacroHost, step: MacroStep): Promise<MacroOutcome> 
     case 'delete-backward':
       return host.deleteBackward(step.count);
     case 'delete-forward':
-      // The engine exposes no separate forward deletion; report an explicit failure rather than skipping silently.
-      return { ok: false, message: macroMessages().deleteForwardUnsupported, reason: 'unsupported-step' };
+      return host.deleteForward(step.count);
   }
 }
 

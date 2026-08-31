@@ -91,6 +91,56 @@ describe('MacroKit — recording and replay', () => {
   });
 });
 
+describe('MacroKit — shortcut validation', () => {
+  it('requires a real modifier and a parseable form', () => {
+    const { kit } = createKit();
+
+    expect(kit.validateShortcut(undefined).ok).toBe(true);
+    expect(kit.validateShortcut('  ').ok).toBe(true);
+    expect(kit.validateShortcut('Ctrl+Alt+M').ok).toBe(true);
+
+    // A bare letter would fire on ordinary typing; Shift alone is a capital letter.
+    expect(kit.validateShortcut('a').ok).toBe(false);
+    expect(kit.validateShortcut('Shift+a').ok).toBe(false);
+    expect(kit.validateShortcut('Ctrl+').ok).toBe(false);
+  });
+
+  it('rejects shortcuts reserved by the host', () => {
+    const kit = new MacroKit({
+      host: createFakeHost(),
+      storage: createMemoryStorage(),
+      runner: 'eval',
+      reservedShortcuts: ['Ctrl+S', 'not-parseable', 'Mod+K'],
+    });
+
+    expect(kit.validateShortcut('Ctrl+S').ok).toBe(false);
+    // Mod expands to both Ctrl and Meta — either form collides.
+    expect(kit.validateShortcut('Ctrl+K').ok).toBe(false);
+    expect(kit.validateShortcut('Meta+K').ok).toBe(false);
+    expect(kit.validateShortcut('Ctrl+Alt+K').ok).toBe(true);
+  });
+
+  it('rejects a shortcut already used by another item, allows the item itself', () => {
+    const { kit } = createKit();
+    const snippet = kit.saveSnippet({ name: 'בסד', text: 'בס"ד', shortcut: 'Ctrl+Alt+7' });
+
+    const taken = kit.validateShortcut('Ctrl+Alt+7');
+    expect(taken.ok).toBe(false);
+    if (!taken.ok) expect(taken.message).toContain('בסד');
+
+    // Editing the owner keeps its own shortcut valid.
+    expect(kit.validateShortcut('Ctrl+Alt+7', snippet.id).ok).toBe(true);
+  });
+
+  it('the save paths enforce validation by throwing', () => {
+    const { kit } = createKit();
+    kit.saveSnippet({ name: 'א', text: 'ב', shortcut: 'Ctrl+Alt+7' });
+
+    expect(() => kit.saveScript({ name: 'x', source: '1', shortcut: 'a' })).toThrow();
+    expect(() => kit.saveSnippet({ name: 'y', text: 'z', shortcut: 'Ctrl+Alt+7' })).toThrow();
+  });
+});
+
 describe('MacroKit — snippets and import/export', () => {
   it('expands a saved snippet with variables', async () => {
     const { kit, host } = createKit();

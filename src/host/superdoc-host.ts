@@ -94,6 +94,14 @@ export interface SuperdocHostOptions {
   superdoc: SuperdocLike;
   /** The element the document renders in — typing events are captured on it. */
   container?: HTMLElement | null;
+  /**
+   * Whether the adapter may fall back to the engine's internal ProseMirror
+   * view for the operations that have no public surface: backward/forward
+   * deletion, full-document text, and insertion when the Document API is
+   * missing. Default: true. Hosts that want to stay strictly on public
+   * surfaces set false — those operations then fail closed.
+   */
+  viewFallback?: boolean;
 }
 
 export interface SuperdocMacroHost extends MacroHost {
@@ -129,43 +137,104 @@ function emptySelection(): SelectionSnapshot {
 
 export function createSuperdocHost(options: SuperdocHostOptions): SuperdocMacroHost {
   const { superdoc, container } = options;
+  const viewFallback = options.viewFallback ?? true;
 
   // Read at call time, never cached: activeEditor is replaced on every document open.
   const commands = (): CommandsLike | null => superdoc.ui?.commands ?? null;
   const doc = (): DocLike | null => superdoc.activeEditor?.doc ?? null;
-  const view = (): ProseMirrorViewLike | null => superdoc.activeEditor?.view ?? null;
   const search = (): SearchHandleLike | null => superdoc.ui?.search ?? null;
+  /**
+   * The single gate to the internal ProseMirror view. Every use of a
+   * non-public surface goes through here, so disabling the fallback (or a
+   * future engine that hides the view) degrades to closed failures in one
+   * place.
+   */
+  const view = (): ProseMirrorViewLike | null =>
+    viewFallback ? (superdoc.activeEditor?.view ?? null) : null;
 
   const commandListeners = new Set<(id: string, payload: unknown) => void>();
   const inputListeners = new Set<(event: TextInputEvent) => void>();
 
-  /* Command observation: wrap executeAsync, once, restored on dispose. */
+  const emitInput = (mapped: TextInputEvent): void => {
+    for (const listener of inputListeners) {
+      try {
+        listener(mapped);
+      } catch (error) {
+        console.warn('[superdoc-macros] input listener threw', error);
+      }
+    }
+  };
+
+  /* Command observation: wrap executeAsync, once, restored on dispose.
+     Listeners are notified only after the engine reports success — a command
+     that was refused (not routed, or a failed receipt) must not enter a
+     recording, or replay would re-fail it or, worse, apply it in a context
+     where it now succeeds unintended. */
   const wrapped = commands();
   const originalExecuteAsync = wrapped?.executeAsync;
   if (wrapped && originalExecuteAsync) {
     wrapped.executeAsync = function (id: string, payload?: unknown): Promise<unknown> {
-      for (const listener of commandListeners) {
-        try {
-          listener(id, payload);
-        } catch (error) {
-          console.warn('[superdoc-macros] command listener threw', error);
-        }
-      }
-      return originalExecuteAsync.call(wrapped, id, payload);
+      const result = originalExecuteAsync.call(wrapped, id, payload);
+      void Promise.resolve(result)
+        .then((value) => {
+          if (value === false) return;
+          if (typeof value === 'object' && value !== null && (value as DocReceiptLike).success === false) return;
+          for (const listener of commandListeners) {
+            try {
+              listener(id, payload);
+            } catch (error) {
+              console.warn('[superdoc-macros] command listener threw', error);
+            }
+          }
+        })
+        .catch(() => undefined); // a thrown command is a failure — nothing to record.
+      return result;
     };
   }
 
-  /* Typing: beforeinput on the container, capture phase. */
+  /* Typing: beforeinput on the container, capture phase.
+
+     IME composition is folded to a single event: while composing, the
+     engine fires insertCompositionText repeatedly with the growing
+     candidate text, and mapping each one would record the word once per
+     keystroke. The events are suppressed during composition and the final
+     text is emitted once, from compositionend. */
+  let composing = false;
+
+  const onCompositionStart = (): void => {
+    composing = true;
+  };
+
+  const onCompositionEnd = (event: Event): void => {
+    composing = false;
+    const data = (event as CompositionEvent).data;
+    if (typeof data === 'string' && data.length > 0) emitInput({ kind: 'insert-text', text: data });
+  };
+
   const onBeforeInput = (event: Event): void => {
     const input = event as InputEvent;
     let mapped: TextInputEvent | null = null;
     switch (input.inputType) {
       case 'insertText':
       case 'insertCompositionText':
+        if (composing) break; // the final text arrives from compositionend.
         if (typeof input.data === 'string' && input.data.length > 0) {
           mapped = { kind: 'insert-text', text: input.data };
         }
         break;
+      // Paste, drop and spellcheck replacement carry their text either in
+      // `data` or in a dataTransfer — without this branch a recording
+      // silently missed everything the user pasted.
+      case 'insertFromPaste':
+      case 'insertFromDrop':
+      case 'insertReplacementText': {
+        const text =
+          typeof input.data === 'string' && input.data.length > 0
+            ? input.data
+            : input.dataTransfer?.getData('text/plain') ?? '';
+        if (text.length > 0) mapped = { kind: 'insert-text', text };
+        break;
+      }
       case 'insertParagraph':
         mapped = { kind: 'insert-paragraph' };
         break;
@@ -178,27 +247,35 @@ export function createSuperdocHost(options: SuperdocHostOptions): SuperdocMacroH
       default:
         break;
     }
-    if (!mapped) return;
-    for (const listener of inputListeners) {
-      try {
-        listener(mapped);
-      } catch (error) {
-        console.warn('[superdoc-macros] input listener threw', error);
-      }
-    }
+    if (mapped) emitInput(mapped);
   };
-  container?.addEventListener('beforeinput', onBeforeInput, true);
 
-  async function readSelection(includeText: boolean): Promise<SelectionSnapshot> {
+  container?.addEventListener('beforeinput', onBeforeInput, true);
+  container?.addEventListener('compositionstart', onCompositionStart, true);
+  container?.addEventListener('compositionend', onCompositionEnd, true);
+
+  /**
+   * `failed: true` means the engine call itself threw — as opposed to a
+   * clean "no selection" answer. Callers that write relative to the caret
+   * must fail closed on it: falling back to "no target" would send the text
+   * to the end of the document, far from where the user is looking.
+   */
+  async function readSelectionDetailed(
+    includeText: boolean,
+  ): Promise<{ snapshot: SelectionSnapshot; failed: boolean }> {
     const current = doc()?.selection?.current;
-    if (typeof current !== 'function') return emptySelection();
+    if (typeof current !== 'function') return { snapshot: emptySelection(), failed: false };
 
     let info: SelectionInfoLike | undefined;
     try {
       info = await current(includeText ? { includeText: true } : undefined);
     } catch {
-      return emptySelection();
+      return { snapshot: emptySelection(), failed: true };
     }
+    return { snapshot: parseSelectionInfo(info), failed: false };
+  }
+
+  function parseSelectionInfo(info: SelectionInfoLike | undefined): SelectionSnapshot {
     if (!info || typeof info !== 'object') return emptySelection();
 
     const segments = Array.isArray(info.target?.segments) ? info.target.segments : [];
@@ -260,7 +337,10 @@ export function createSuperdocHost(options: SuperdocHostOptions): SuperdocMacroH
       const insert = doc()?.insert;
       if (typeof insert === 'function') {
         // Without a target the insertion falls to the end of the document — so the target comes from the live selection.
-        const snapshot = await readSelection(false);
+        const { snapshot, failed: selectionFailed } = await readSelectionDetailed(false);
+        // A failed read is not "no selection": inserting without a target
+        // would land the text at the end of the document. Fail closed.
+        if (selectionFailed) return failed(macroMessages().selectionUnavailable, 'selection-read-failed');
         try {
           const receipt = await insert({
             value: text,
@@ -306,8 +386,25 @@ export function createSuperdocHost(options: SuperdocHostOptions): SuperdocMacroH
       }
     },
 
-    getSelection(options) {
-      return readSelection(options?.includeText ?? false);
+    async deleteForward(count): Promise<MacroOutcome> {
+      const pm = view();
+      if (!pm) return failed(macroMessages().deletionUnavailable, 'view-unavailable');
+      try {
+        const { from } = pm.state.selection;
+        const size = pm.state.doc.content.size;
+        const end = Math.min(size, from + Math.max(0, Math.trunc(count)));
+        if (end === from) return { ok: true };
+        const tr = pm.state.tr;
+        tr.delete(from, end);
+        pm.dispatch(tr);
+        return { ok: true };
+      } catch (error) {
+        return failed(error instanceof Error ? error.message : macroMessages().deleteFailed, 'threw');
+      }
+    },
+
+    async getSelection(options) {
+      return (await readSelectionDetailed(options?.includeText ?? false)).snapshot;
     },
 
     async replaceAll(query, replacement) {
@@ -367,6 +464,8 @@ export function createSuperdocHost(options: SuperdocHostOptions): SuperdocMacroH
     dispose() {
       if (wrapped && originalExecuteAsync) wrapped.executeAsync = originalExecuteAsync;
       container?.removeEventListener('beforeinput', onBeforeInput, true);
+      container?.removeEventListener('compositionstart', onCompositionStart, true);
+      container?.removeEventListener('compositionend', onCompositionEnd, true);
       commandListeners.clear();
       inputListeners.clear();
     },

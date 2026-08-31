@@ -133,11 +133,66 @@ describe('createSuperdocHost', () => {
 
     // A "UI-driven" execution — directly on the engine, not through the host.
     await engine.ui!.commands!.executeAsync('bold');
+    // Notification is deliberately post-success, i.e. async — wait a tick.
+    await new Promise((resolve) => setTimeout(resolve, 0));
     expect(seen).toEqual(['bold']);
 
     host.dispose();
     await engine.ui!.commands!.executeAsync('bold');
+    await new Promise((resolve) => setTimeout(resolve, 0));
     expect(seen).toEqual(['bold']);
+  });
+
+  it('a command the engine refused is not observed — it must not enter a recording', async () => {
+    const engine = createFakeSuperdoc();
+    const host = createSuperdocHost({ superdoc: engine });
+
+    const seen: string[] = [];
+    host.onCommand((id) => seen.push(id));
+
+    await engine.ui!.commands!.executeAsync('blocked'); // returns false — not routed
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(seen).toEqual([]);
+    host.dispose();
+  });
+
+  it('deleteForward goes through ProseMirror and is clamped to the document end', async () => {
+    const engine = createFakeSuperdoc();
+    const host = createSuperdocHost({ superdoc: engine });
+
+    const outcome = await host.deleteForward(99);
+
+    expect(outcome.ok).toBe(true);
+    // Caret at 5, document size 10 — the deletion clamps to 5-10.
+    expect(engine.log).toEqual(expect.arrayContaining(['pm:delete:5-10', 'pm:dispatch']));
+  });
+
+  it('a failed selection read blocks insertion — no fallback to end-of-document', async () => {
+    const engine = createFakeSuperdoc();
+    engine.activeEditor!.doc!.selection = {
+      current: async () => {
+        throw new Error('engine hiccup');
+      },
+    };
+    const host = createSuperdocHost({ superdoc: engine });
+
+    const outcome = await host.insertText('אבג');
+
+    expect(outcome.ok).toBe(false);
+    if (!outcome.ok) expect(outcome.reason).toBe('selection-read-failed');
+    expect(engine.log.filter((entry) => entry.startsWith('insert:'))).toEqual([]);
+  });
+
+  it('viewFallback: false fails the view-backed operations closed', async () => {
+    const engine = createFakeSuperdoc();
+    const host = createSuperdocHost({ superdoc: engine, viewFallback: false });
+
+    expect((await host.deleteBackward(1)).ok).toBe(false);
+    expect((await host.deleteForward(1)).ok).toBe(false);
+    expect(await host.getDocumentText()).toBe('');
+    // The Document API path still works — only the escape hatch is closed.
+    expect((await host.insertText('א')).ok).toBe(true);
   });
 
   it('fails closed when there is no document', async () => {

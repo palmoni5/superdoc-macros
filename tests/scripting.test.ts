@@ -109,4 +109,22 @@ describe('eval runner', () => {
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.reason).toBe('timeout');
   });
+
+  it('a script that keeps running past its timeout can no longer touch the document', async () => {
+    const host = createFakeHost();
+    // eval cannot stop the script itself — after the timeout it is still
+    // alive. The revoked bridge is what keeps it away from the document.
+    const result = await runner.run(
+      `
+      await new Promise((resolve) => setTimeout(resolve, 60));
+      await api.insertText('late');
+      `,
+      createMacroApi(host),
+      { timeoutMs: 20 },
+    );
+    expect(result.ok).toBe(false);
+
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(host.text).toBe('');
+  });
 });

@@ -70,6 +70,24 @@ describe('replayMacro', () => {
     expect(target.executed).toEqual([{ id: 'bold', payload: undefined }]);
   });
 
+  it('replays forward deletion', async () => {
+    const recordedOn = createFakeHost();
+    const recorder = new MacroRecorder(recordedOn);
+    recorder.start();
+    await recordedOn.typeDeleteForward();
+    await recordedOn.typeDeleteForward();
+    const steps = recorder.stop();
+    expect(steps).toEqual([{ type: 'delete-forward', count: 2 }]);
+
+    const target = createFakeHost();
+    await target.insertText('אבגד');
+    target.cursor = 1;
+    const result = await replayMacro(target, steps);
+
+    expect(result.ok).toBe(true);
+    expect(target.text).toBe('אד');
+  });
+
   it('stops at the first failure by default, continues with stopOnError: false', async () => {
     const host = createFakeHost();
     host.failCommands.add('italic');

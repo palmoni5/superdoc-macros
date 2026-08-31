@@ -39,6 +39,32 @@ export function limitCalls(bridge: MacroBridge, maxCalls: number): MacroBridge {
   };
 }
 
+/**
+ * Wraps a bridge with a kill switch. After `revoke()` every new call is
+ * rejected — so a script that keeps running past its timeout (the eval
+ * runner cannot stop it) can no longer touch the document.
+ *
+ * What this cannot do: abort a host call that already reached the engine.
+ * The engine's public surfaces expose no cancellation, so an in-flight
+ * operation completes; what is guaranteed is that nothing *new* starts.
+ */
+export function revocable(bridge: MacroBridge): { bridge: MacroBridge; revoke: () => void } {
+  let revoked = false;
+  return {
+    revoke: () => {
+      revoked = true;
+    },
+    bridge: {
+      api: bridge.api,
+      callCount: bridge.callCount,
+      call(method, args) {
+        if (revoked) return Promise.reject(new Error(macroMessages().macroStopped));
+        return bridge.call(method, args);
+      },
+    },
+  };
+}
+
 /** An api proxy that routes everything through `bridge.call`, so the cap applies here too. */
 function apiThroughBridge(bridge: MacroBridge): unknown {
   return new Proxy(
@@ -56,7 +82,11 @@ export function createEvalRunner(): MacroRunner {
   return {
     async run(source, bridge, options: MacroRunOptions = {}): Promise<MacroRunResult> {
       const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
-      const limited = limitCalls(bridge, options.maxApiCalls ?? DEFAULT_MAX_API_CALLS);
+      // The revocable wrapper is what contains a timed-out script: eval cannot
+      // stop it from running, but it can no longer reach the document.
+      const { bridge: guarded, revoke } = revocable(
+        limitCalls(bridge, options.maxApiCalls ?? DEFAULT_MAX_API_CALLS),
+      );
 
       let fn: (...fnArgs: unknown[]) => Promise<unknown>;
       try {
@@ -79,7 +109,7 @@ export function createEvalRunner(): MacroRunner {
 
       const run = (async (): Promise<MacroRunResult> => {
         try {
-          const value = await fn(apiThroughBridge(limited));
+          const value = await fn(apiThroughBridge(guarded));
           return { ok: true, value };
         } catch (error) {
           return {
@@ -94,6 +124,7 @@ export function createEvalRunner(): MacroRunner {
         return await Promise.race([run, timeout]);
       } finally {
         clearTimeout(timer);
+        revoke();
       }
     },
   };

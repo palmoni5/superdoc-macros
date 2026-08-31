@@ -76,7 +76,9 @@ if (!result.ok) console.warn(result.message);
 
 ### Security
 
-The default is a **real sandbox**: scripts run in an iframe with `sandbox="allow-scripts"` only — an opaque origin, no access to the application's DOM, localStorage, cookies, or credentialed network. The script's only way to touch the document is the API above, with a time cap (default 30 s — enforced even against infinite loops, by removing the iframe) and a call cap (10,000).
+The default is a **real sandbox**: scripts run in an iframe with `sandbox="allow-scripts"` only — an opaque origin, no access to the application's DOM, localStorage or cookies — plus a `default-src 'none'` CSP inside the iframe, so the script cannot fetch or open sockets to the public internet either. The script's only way to touch the document is the API above, with a time cap (default 30 s — enforced even against infinite loops, by removing the iframe) and a call cap (10,000). When a run ends (result, error or timeout), its bridge is revoked: any late call is rejected and can no longer touch the document.
+
+Honest limits: the browser offers no per-iframe memory cap, and a host call that already reached the engine cannot be aborted mid-flight (the engine exposes no cancellation) — what is guaranteed is that nothing new starts.
 
 If you must waive isolation (e.g. a CSP that blocks `srcdoc`), switch to the direct runner: `new MacroKit({ host, runner: 'eval' })` — see the warnings in the code.
 
@@ -133,6 +135,16 @@ kit.importState(json, { merge: true });
 ```
 
 `MacroStorage` is a two-method interface — implement it to persist to a file (e.g. a plugin workspace).
+
+Imports are strictly validated: every item and every recorded step is type-checked and size-bounded (see `IMPORT_LIMITS`), and one invalid item rejects the whole file — no partial imports.
+
+## Shortcut safety
+
+Saved bindings go through `kit.validateShortcut(shortcut, excludeId?)` — enforced on every save: a binding must parse, must carry a real modifier (Ctrl/Alt/Meta — a bare letter would fire on ordinary typing), must not collide with another saved item, and must not collide with shortcuts the host declared as reserved:
+
+```ts
+const kit = new MacroKit({ host, reservedShortcuts: ['Ctrl+S', 'Ctrl+P', /* … the editor's registry … */] });
+```
 
 ## Connecting a different host
 

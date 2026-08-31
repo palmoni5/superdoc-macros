@@ -49,6 +49,8 @@ export interface MacroHost {
   insertText(text: string): Promise<MacroOutcome>;
   /** Deletes characters backwards from the caret. */
   deleteBackward(count: number): Promise<MacroOutcome>;
+  /** Deletes characters forwards from the caret. */
+  deleteForward(count: number): Promise<MacroOutcome>;
   /** Snapshot of the current selection. Never throws. */
   getSelection(options?: { includeText?: boolean }): Promise<SelectionSnapshot>;
   /** Replaces every occurrence of `query` with `replacement`. Returns how many were replaced. */

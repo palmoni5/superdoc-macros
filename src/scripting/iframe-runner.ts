@@ -17,7 +17,7 @@
  */
 import { macroMessages } from '../messages.js';
 import type { MacroBridge } from './macro-api.js';
-import { limitCalls } from './eval-runner.js';
+import { limitCalls, revocable } from './eval-runner.js';
 import {
   DEFAULT_MAX_API_CALLS,
   DEFAULT_TIMEOUT_MS,
@@ -131,13 +131,25 @@ export function createIframeRunner(doc: Document = document): MacroRunner {
   return {
     run(source, bridge, options: MacroRunOptions = {}): Promise<MacroRunResult> {
       const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
-      const limited = limitCalls(bridge, options.maxApiCalls ?? DEFAULT_MAX_API_CALLS);
+      // The revocable wrapper closes a small race: a call message that was
+      // already queued when the run finished must not dispatch to the host
+      // after the iframe is gone.
+      const { bridge: guarded, revoke } = revocable(
+        limitCalls(bridge, options.maxApiCalls ?? DEFAULT_MAX_API_CALLS),
+      );
 
       return new Promise<MacroRunResult>((resolve) => {
         const iframe = doc.createElement('iframe');
         iframe.setAttribute('sandbox', 'allow-scripts');
         iframe.style.display = 'none';
-        iframe.srcdoc = `<!doctype html><meta charset="utf-8"><script>${SANDBOX_BOOTSTRAP}</script>`;
+        // The CSP closes the sandbox's remaining hole: an opaque-origin iframe
+        // cannot reach the app, but it can still fetch the public internet.
+        // `default-src 'none'` blocks fetch/XHR/WebSocket/resources inside it;
+        // only the inline bootstrap (and the AsyncFunction it compiles) runs.
+        iframe.srcdoc =
+          `<!doctype html><meta charset="utf-8">` +
+          `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline' 'unsafe-eval'">` +
+          `<script>${SANDBOX_BOOTSTRAP}</script>`;
 
         let settled = false;
         let timer: ReturnType<typeof setTimeout> | undefined;
@@ -145,6 +157,7 @@ export function createIframeRunner(doc: Document = document): MacroRunner {
         const finish = (result: MacroRunResult): void => {
           if (settled) return;
           settled = true;
+          revoke();
           clearTimeout(timer);
           removeEventListener('message', onMessage);
           iframe.remove();
@@ -167,7 +180,7 @@ export function createIframeRunner(doc: Document = document): MacroRunner {
 
           if (data.kind === 'call') {
             const { id, method, args } = data;
-            limited
+            guarded
               .call(method, args)
               .then((value) => {
                 iframe.contentWindow?.postMessage(

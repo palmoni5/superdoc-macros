@@ -31,9 +31,7 @@ export interface MacroMessages {
   syntaxError: (detail: string) => string;
   timedOut: (seconds: number) => string;
   callLimitExceeded: (limit: number) => string;
-
-  /* Replay */
-  deleteForwardUnsupported: string;
+  macroStopped: string;
 
   /* Manager */
   scriptNotFound: string;
@@ -43,8 +41,15 @@ export interface MacroMessages {
   anotherMacroRunning: string;
   invalidImport: string;
 
+  /* Shortcut validation */
+  shortcutInvalid: string;
+  shortcutNeedsModifier: string;
+  shortcutReserved: string;
+  shortcutTaken: (ownerName: string) => string;
+
   /* SuperDoc host adapter */
   noDocument: string;
+  selectionUnavailable: string;
   unknownCommand: (id: string) => string;
   actionFailed: string;
   deletionUnavailable: string;
@@ -64,8 +69,7 @@ export const ENGLISH_MESSAGES: MacroMessages = {
   syntaxError: (detail) => `Macro syntax error: ${detail}`,
   timedOut: (seconds) => `The macro did not finish within ${seconds} seconds and was stopped`,
   callLimitExceeded: (limit) => `The macro exceeded the API call limit (${limit}) and was stopped`,
-
-  deleteForwardUnsupported: 'Forward deletion is not supported during replay',
+  macroStopped: 'The macro was stopped — the call was not executed',
 
   scriptNotFound: 'Macro not found',
   recordingNotFound: 'Recording not found',
@@ -74,7 +78,13 @@ export const ENGLISH_MESSAGES: MacroMessages = {
   anotherMacroRunning: 'Another macro is still running',
   invalidImport: 'The file is not a valid macro export',
 
+  shortcutInvalid: 'Invalid shortcut — use a form like Ctrl+Alt+M',
+  shortcutNeedsModifier: 'A shortcut must include Ctrl, Alt or Meta',
+  shortcutReserved: 'This shortcut is reserved by the editor',
+  shortcutTaken: (ownerName) => `This shortcut is already used by "${ownerName}"`,
+
   noDocument: 'No document is open',
+  selectionUnavailable: 'The caret position could not be read — nothing was inserted',
   unknownCommand: (id) => `The engine does not recognize the command ${id}`,
   actionFailed: 'The operation failed',
   deletionUnavailable: 'Deletion is not available in this document',
@@ -95,8 +105,7 @@ export const HEBREW_MESSAGES: MacroMessages = {
   syntaxError: (detail) => `שגיאת תחביר במאקרו: ${detail}`,
   timedOut: (seconds) => `המאקרו לא הסתיים תוך ${seconds} שניות ונעצר`,
   callLimitExceeded: (limit) => `המאקרו חצה את תקרת הקריאות (${limit}) ונעצר`,
-
-  deleteForwardUnsupported: 'מחיקה קדימה אינה נתמכת בניגון',
+  macroStopped: 'המאקרו נעצר — הקריאה לא בוצעה',
 
   scriptNotFound: 'המאקרו לא נמצא',
   recordingNotFound: 'ההקלטה לא נמצאה',
@@ -105,7 +114,13 @@ export const HEBREW_MESSAGES: MacroMessages = {
   anotherMacroRunning: 'מאקרו אחר עדיין רץ',
   invalidImport: 'הקובץ אינו ייצוא מאקרו תקין',
 
+  shortcutInvalid: 'קיצור לא תקין — הצורה הנדרשת היא למשל Ctrl+Alt+M',
+  shortcutNeedsModifier: 'קיצור חייב לכלול Ctrl,‏ Alt או Meta',
+  shortcutReserved: 'הקיצור הזה שמור לעורך',
+  shortcutTaken: (ownerName) => `הקיצור כבר בשימוש של "${ownerName}"`,
+
   noDocument: 'אין מסמך פתוח',
+  selectionUnavailable: 'קריאת מיקום הסמן נכשלה — לא הוכנס דבר',
   unknownCommand: (id) => `הפקודה ${id} אינה מוכרת למנוע`,
   actionFailed: 'הפעולה נכשלה',
   deletionUnavailable: 'מחיקה אינה זמינה במסמך הזה',
