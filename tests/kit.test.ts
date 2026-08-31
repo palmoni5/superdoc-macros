@@ -141,6 +141,179 @@ describe('MacroKit — shortcut validation', () => {
   });
 });
 
+describe('MacroKit — the scripts gate', () => {
+  function createGatedKit() {
+    const host = createFakeHost();
+    const kit = new MacroKit({ host, storage: createMemoryStorage(), runner: 'eval', scriptsEnabled: false });
+    return { host, kit };
+  }
+
+  it('runScript and runSource refuse when scripts are disabled', async () => {
+    const { kit } = createGatedKit();
+    const saved = kit.saveScript({ name: 'x', source: `await api.insertText('x');` });
+
+    for (const result of [await kit.runScript(saved.id), await kit.runSource('return 1')]) {
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.message).toContain('disabled');
+    }
+  });
+
+  it('a script shortcut is not bound while disabled — other shortcuts still are', async () => {
+    const { kit, host } = createGatedKit();
+    kit.saveScript({ name: 'x', source: `await api.insertText('script');`, shortcut: 'Ctrl+Alt+1' });
+    kit.saveSnippet({ name: 'בסד', text: 'בס"ד', shortcut: 'Ctrl+Alt+2' });
+
+    let keydown: ((event: unknown) => void) | null = null;
+    kit.attachShortcuts({
+      addEventListener: (_type, listener) => {
+        keydown = listener as (event: unknown) => void;
+      },
+      removeEventListener: () => undefined,
+    });
+    const press = (key: string) =>
+      keydown!({
+        key,
+        ctrlKey: true,
+        altKey: true,
+        shiftKey: false,
+        metaKey: false,
+        preventDefault: () => undefined,
+        stopPropagation: () => undefined,
+      });
+
+    press('1');
+    press('2');
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    // Only the snippet ran: the script's key was not even swallowed.
+    expect(host.text).toBe('בס"ד');
+  });
+});
+
+describe('MacroKit — save-path limits (the persistence invariant)', () => {
+  it('rejects oversized fields and empty names before touching the state', () => {
+    const { kit } = createKit();
+
+    expect(() => kit.saveSnippet({ name: '', text: 'x' })).toThrow();
+    expect(() => kit.saveSnippet({ name: 'x', text: 'y'.repeat(100_001) })).toThrow();
+    expect(() => kit.saveScript({ name: 'x', source: 'y'.repeat(200_001) })).toThrow();
+    expect(kit.listSnippets()).toHaveLength(0);
+    expect(kit.listScripts()).toHaveLength(0);
+  });
+
+  it('rejects additions past the item cap, allows in-place updates', () => {
+    const { kit } = createKit();
+    let last = '';
+    for (let index = 0; index < 500; index += 1) {
+      last = kit.saveSnippet({ name: `s${index}`, text: 'x' }).id;
+    }
+
+    expect(() => kit.saveSnippet({ name: 'overflow', text: 'x' })).toThrow();
+    // Updating an existing item is not an addition.
+    expect(() => kit.saveSnippet({ id: last, name: 'renamed', text: 'x' })).not.toThrow();
+  });
+
+  it('splits an oversized recorded paste into loadable steps', async () => {
+    const { kit, host } = createKit();
+    const big = 'א'.repeat(150_000);
+
+    kit.startRecording();
+    await host.typePaste(big);
+    const recording = kit.stopRecording('paste');
+
+    expect(recording).not.toBeNull();
+    expect(recording!.steps.length).toBe(2);
+    expect(recording!.steps.every((step) => step.type === 'insert-text' && step.text.length <= 100_000)).toBe(true);
+    // The exact text survives the split.
+    expect(recording!.steps.map((step) => (step.type === 'insert-text' ? step.text : '')).join('')).toBe(big);
+  });
+});
+
+describe('MacroKit — atomic import validation', () => {
+  it('rejects an import whose shortcut breaks the binding rules, untouched state', () => {
+    const { kit } = createKit();
+    kit.saveSnippet({ name: 'קיים', text: 'x' });
+
+    const bad = JSON.stringify({
+      version: 1,
+      scripts: [],
+      recordings: [],
+      snippets: [{ id: 'n1', name: 'חדש', text: 'y', shortcut: 'a' }],
+    });
+
+    const outcome = kit.importState(bad, { merge: true });
+    expect(outcome.ok).toBe(false);
+    if (!outcome.ok) expect(outcome.message).toContain('חדש');
+    expect(kit.listSnippets()).toHaveLength(1);
+  });
+
+  it('rejects a reserved or internally-duplicated shortcut in the merged result', () => {
+    const kit = new MacroKit({
+      host: createFakeHost(),
+      storage: createMemoryStorage(),
+      runner: 'eval',
+      reservedShortcuts: ['Ctrl+S'],
+    });
+    kit.saveSnippet({ name: 'קיים', text: 'x', shortcut: 'Ctrl+Alt+3' });
+
+    const reserved = JSON.stringify({
+      version: 1,
+      scripts: [],
+      recordings: [],
+      snippets: [{ id: 'n1', name: 'שמור-מערכת', text: 'y', shortcut: 'Ctrl+S' }],
+    });
+    expect(kit.importState(reserved, { merge: true }).ok).toBe(false);
+
+    // The duplicate is against an *existing* item — visible only on the merged result.
+    const duplicate = JSON.stringify({
+      version: 1,
+      scripts: [],
+      recordings: [],
+      snippets: [{ id: 'n2', name: 'כפול', text: 'y', shortcut: 'Ctrl+Alt+3' }],
+    });
+    expect(kit.importState(duplicate, { merge: true }).ok).toBe(false);
+    expect(kit.listSnippets()).toHaveLength(1);
+  });
+
+  it('rejects a merge that would exceed the item cap', () => {
+    const { kit } = createKit();
+    for (let index = 0; index < 500; index += 1) kit.saveSnippet({ name: `s${index}`, text: 'x' });
+
+    const one = JSON.stringify({
+      version: 1,
+      scripts: [],
+      recordings: [],
+      snippets: [{ id: 'extra', name: 'עוד', text: 'y' }],
+    });
+    const outcome = kit.importState(one, { merge: true });
+    expect(outcome.ok).toBe(false);
+    expect(kit.listSnippets()).toHaveLength(500);
+  });
+});
+
+describe('MacroKit — auto-text during recording', () => {
+  it('records the expanded text, not the raw trigger', async () => {
+    const { kit, host } = createKit();
+    kit.saveSnippet({ name: 'בס"ד', text: 'בס"ד', trigger: 'בסד' });
+    kit.enableAutoText();
+
+    kit.startRecording();
+    await host.typeText('בסד ');
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const recording = kit.stopRecording('עם הרחבה');
+
+    expect(host.text).toBe('בס"ד ');
+    expect(recording!.steps).toEqual([{ type: 'insert-text', text: 'בס"ד ' }]);
+
+    // Replay reproduces the document exactly, with auto-text out of the loop.
+    host.text = '';
+    host.cursor = 0;
+    const result = await kit.replayRecording(recording!.id);
+    expect(result.ok).toBe(true);
+    expect(host.text).toBe('בס"ד ');
+  });
+});
+
 describe('MacroKit — snippets and import/export', () => {
   it('expands a saved snippet with variables', async () => {
     const { kit, host } = createKit();

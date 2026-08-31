@@ -124,6 +124,16 @@ function isValidState(value: unknown): value is PersistedMacroState {
 }
 
 /**
+ * Whether a state object passes the exact validation the loader applies.
+ * The save paths hold this as an invariant: state that would be rejected on
+ * the next load must never be persisted — otherwise a single oversized save
+ * silently wipes everything at the next startup.
+ */
+export function isPersistableState(value: unknown): value is PersistedMacroState {
+  return isValidState(value);
+}
+
+/**
  * Parses saved/imported state. `null` on any unexpected shape, oversized
  * field or oversized file — never throws, never partially accepts: one
  * invalid item rejects the whole document, so the caller can tell the user

@@ -14,6 +14,7 @@ import type { MacroRunner, MacroRunOptions, MacroRunResult } from './scripting/r
 import { MacroRecorder, replayMacro, type ReplayOptions, type ReplayResult } from './recorder/recorder.js';
 import { AutoText, type AutoTextOptions } from './snippets/autotext.js';
 import { expandSnippet, type ExpandOptions } from './snippets/snippets.js';
+import { IMPORT_LIMITS, isPersistableState } from './storage.js';
 import {
   bindShortcuts,
   hasBindingModifier,
@@ -50,6 +51,20 @@ export interface MacroKitOptions {
    * editor shortcut. Unparseable entries are ignored.
    */
   reservedShortcuts?: readonly string[];
+  /**
+   * Whether scripted macros may *execute*. Default: true. When false the
+   * gate is real, not cosmetic: `runScript`/`runSource` refuse, and saved
+   * script shortcuts are not bound — so a pre-existing or imported script
+   * cannot run through any path. Saving and listing still work (a UI may
+   * let the user manage scripts it will not run).
+   */
+  scriptsEnabled?: boolean;
+  /**
+   * Called when a recording hits the step cap and stops on its own. The
+   * steps are kept — `stopRecording(name)` still saves them — but a UI that
+   * shows a live "recording" indicator must update it.
+   */
+  onRecordingAutoStop?: () => void;
 }
 
 export type ShortcutValidation = { ok: true } | { ok: false; message: string };
@@ -76,6 +91,7 @@ export class MacroKit {
   private readonly recorder: MacroRecorder;
   private readonly autoText: AutoText;
   private readonly reservedSignatures: ReadonlySet<string>;
+  private readonly scriptsEnabled: boolean;
   private running = false;
 
   constructor(options: MacroKitOptions) {
@@ -88,9 +104,22 @@ export class MacroKit {
     this.runner =
       runner === 'iframe' ? createIframeRunner() : runner === 'eval' ? createEvalRunner() : runner;
 
+    this.scriptsEnabled = options.scriptsEnabled ?? true;
     this.state = this.storage.load() ?? emptyState();
-    this.recorder = new MacroRecorder(this.host);
-    this.autoText = new AutoText(this.host, () => this.state.snippets, options.autoText);
+    this.recorder = new MacroRecorder(this.host, { onAutoStop: options.onRecordingAutoStop });
+    this.autoText = new AutoText(this.host, () => this.state.snippets, {
+      ...options.autoText,
+      // The recorder rewrite keeps recordings truthful: the user typed a
+      // trigger word, the document holds the expanded text, and a replay of
+      // the raw keystrokes would diverge. See applyAutoTextExpansion.
+      onExpand: (snippet, expansion) => {
+        this.recorder.applyAutoTextExpansion(
+          expansion.trigger.length + expansion.expandChar.length,
+          expansion.rendered + expansion.expandChar,
+        );
+        options.autoText?.onExpand?.(snippet, expansion);
+      },
+    });
 
     const reserved = new Set<string>();
     for (const shortcut of options.reservedShortcuts ?? []) {
@@ -157,6 +186,8 @@ export class MacroKit {
 
   saveScript(input: { id?: string; name: string; source: string; shortcut?: string }): SavedScript {
     this.requireValidShortcut(input.shortcut, input.id);
+    this.requireItemLimits({ name: input.name, source: input.source });
+    this.requireRoom(this.state.scripts, input.id);
     const script: SavedScript = {
       id: input.id ?? newId(),
       name: input.name,
@@ -181,6 +212,11 @@ export class MacroKit {
 
   /** Runs an unsaved script — e.g. from the macro editor before saving. */
   async runSource(source: string): Promise<MacroRunResult> {
+    // The real gate: with scripts disabled nothing executes through any
+    // path — not a saved script, not an imported one, not its shortcut.
+    if (!this.scriptsEnabled) {
+      return { ok: false, reason: 'error', message: macroMessages().scriptsDisabled };
+    }
     const guard = this.guardRun();
     if (guard) return guard;
 
@@ -211,7 +247,9 @@ export class MacroKit {
   /** Stops and saves. `null` when no step was recorded — there is nothing to save. */
   stopRecording(name: string, shortcut?: string): RecordedMacro | null {
     this.requireValidShortcut(shortcut);
-    const steps: MacroStep[] = this.recorder.stop();
+    this.requireItemLimits({ name });
+    this.requireRoom(this.state.recordings);
+    const steps: MacroStep[] = splitOversizedSteps(this.recorder.stop());
     if (steps.length === 0) return null;
 
     const recording: RecordedMacro = {
@@ -245,6 +283,7 @@ export class MacroKit {
     const recording = this.state.recordings.find((entry) => entry.id === input.id);
     if (!recording) return null;
     if (input.shortcut !== undefined) this.requireValidShortcut(input.shortcut, input.id);
+    if (input.name !== undefined) this.requireItemLimits({ name: input.name });
     if (input.name !== undefined) recording.name = input.name;
     if (input.shortcut !== undefined) {
       if (input.shortcut) recording.shortcut = input.shortcut;
@@ -285,6 +324,8 @@ export class MacroKit {
 
   saveSnippet(input: { id?: string; name: string; text: string; trigger?: string; shortcut?: string }): Snippet {
     this.requireValidShortcut(input.shortcut, input.id);
+    this.requireItemLimits({ name: input.name, text: input.text, trigger: input.trigger });
+    this.requireRoom(this.state.snippets, input.id);
     const snippet: Snippet = {
       id: input.id ?? newId(),
       name: input.name,
@@ -332,8 +373,13 @@ export class MacroKit {
 
   private currentBindings(): ShortcutBinding[] {
     const bindings: ShortcutBinding[] = [];
-    for (const script of this.state.scripts) {
-      if (script.shortcut) bindings.push({ shortcut: script.shortcut, run: () => this.runScript(script.id) });
+    // Part of the scripts gate: with scripts disabled their shortcuts are
+    // not bound at all — runScript would refuse anyway, but an unbound key
+    // is better than a key that swallows the event just to show an error.
+    if (this.scriptsEnabled) {
+      for (const script of this.state.scripts) {
+        if (script.shortcut) bindings.push({ shortcut: script.shortcut, run: () => this.runScript(script.id) });
+      }
     }
     for (const recording of this.state.recordings) {
       if (recording.shortcut) bindings.push({ shortcut: recording.shortcut, run: () => this.replayRecording(recording.id) });
@@ -354,19 +400,79 @@ export class MacroKit {
    * Imports JSON produced by `exportState`. With `merge: true` an imported
    * item with an existing `id` replaces it; without merge the whole state is
    * replaced.
+   *
+   * The check is **atomic, on the final result**: a candidate state is built
+   * first, its size limits and every shortcut in it are validated (the same
+   * rules the save paths enforce — a file cannot smuggle in what typing
+   * cannot), and only a candidate that passed in full is committed. On any
+   * failure the current state is untouched.
    */
   importState(json: string, options: { merge?: boolean } = {}): { ok: boolean; message?: string } {
     const imported = parsePersistedState(json);
     if (!imported) return { ok: false, message: macroMessages().invalidImport };
 
+    let candidate: PersistedMacroState;
     if (options.merge) {
-      for (const script of imported.scripts) this.upsert(this.state.scripts, script);
-      for (const recording of imported.recordings) this.upsert(this.state.recordings, recording);
-      for (const snippet of imported.snippets) this.upsert(this.state.snippets, snippet);
+      candidate = {
+        version: 1,
+        scripts: [...this.state.scripts.map((item) => ({ ...item }))],
+        recordings: [...this.state.recordings.map((item) => ({ ...item }))],
+        snippets: [...this.state.snippets.map((item) => ({ ...item }))],
+      };
+      for (const script of imported.scripts) this.upsert(candidate.scripts, script);
+      for (const recording of imported.recordings) this.upsert(candidate.recordings, recording);
+      for (const snippet of imported.snippets) this.upsert(candidate.snippets, snippet);
     } else {
-      this.state = imported;
+      candidate = imported;
     }
+
+    // The merged result can exceed what each file alone respected.
+    if (!isPersistableState(candidate)) return { ok: false, message: macroMessages().importTooLarge };
+
+    const shortcutsOk = this.validateStateShortcuts(candidate);
+    if (!shortcutsOk.ok) return shortcutsOk;
+
+    this.state = candidate;
     this.persist();
+    return { ok: true };
+  }
+
+  /**
+   * Every shortcut in a candidate state, under the exact rules of
+   * `validateShortcut`: parseable, real modifier, not host-reserved, and
+   * unique within the candidate. `importState` is the only caller — the
+   * save paths enforce the same rules one item at a time.
+   */
+  private validateStateShortcuts(candidate: PersistedMacroState): { ok: true } | { ok: false; message: string } {
+    const seen = new Map<string, string>();
+    const items: ReadonlyArray<{ name: string; shortcut?: string }> = [
+      ...candidate.scripts,
+      ...candidate.recordings,
+      ...candidate.snippets,
+    ];
+
+    for (const item of items) {
+      if (!item.shortcut) continue;
+
+      const parsed = parseShortcut(item.shortcut);
+      if (!parsed) {
+        return { ok: false, message: macroMessages().importRejectedShortcut(item.name, macroMessages().shortcutInvalid) };
+      }
+      if (!hasBindingModifier(parsed)) {
+        return { ok: false, message: macroMessages().importRejectedShortcut(item.name, macroMessages().shortcutNeedsModifier) };
+      }
+
+      for (const signature of shortcutSignatures(parsed)) {
+        if (this.reservedSignatures.has(signature)) {
+          return { ok: false, message: macroMessages().importRejectedShortcut(item.name, macroMessages().shortcutReserved) };
+        }
+        const owner = seen.get(signature);
+        if (owner !== undefined) {
+          return { ok: false, message: macroMessages().importRejectedShortcut(item.name, macroMessages().shortcutTaken(owner)) };
+        }
+        seen.set(signature, item.name);
+      }
+    }
     return { ok: true };
   }
 
@@ -382,6 +488,37 @@ export class MacroKit {
     return null;
   }
 
+  /**
+   * The save-path half of the persistence invariant: field lengths that the
+   * loader would reject are refused at the door. Without this, one oversized
+   * save would make the whole store unloadable — and the next startup would
+   * silently fall back to an empty state, losing everything.
+   */
+  private requireItemLimits(fields: { name: string; text?: string; source?: string; trigger?: string }): void {
+    const limits = IMPORT_LIMITS;
+    if (fields.name.length === 0) throw new MacroError(macroMessages().nameRequired, 'invalid-item');
+    if (fields.name.length > limits.maxNameLength) {
+      throw new MacroError(macroMessages().fieldTooLong('name', limits.maxNameLength), 'invalid-item');
+    }
+    if (fields.text !== undefined && fields.text.length > limits.maxTextLength) {
+      throw new MacroError(macroMessages().fieldTooLong('text', limits.maxTextLength), 'invalid-item');
+    }
+    if (fields.source !== undefined && fields.source.length > limits.maxSourceLength) {
+      throw new MacroError(macroMessages().fieldTooLong('source', limits.maxSourceLength), 'invalid-item');
+    }
+    if (fields.trigger !== undefined && fields.trigger.length > limits.maxTriggerLength) {
+      throw new MacroError(macroMessages().fieldTooLong('trigger', limits.maxTriggerLength), 'invalid-item');
+    }
+  }
+
+  /** The item-count half of the invariant. `existingId` exempts an in-place update. */
+  private requireRoom(list: ReadonlyArray<{ id: string }>, existingId?: string): void {
+    if (existingId && list.some((entry) => entry.id === existingId)) return;
+    if (list.length >= IMPORT_LIMITS.maxItems) {
+      throw new MacroError(macroMessages().tooManyItems, 'too-many-items');
+    }
+  }
+
   private upsert<T extends { id: string }>(list: T[], item: T): void {
     const index = list.findIndex((entry) => entry.id === item.id);
     if (index >= 0) list[index] = item;
@@ -389,6 +526,40 @@ export class MacroKit {
   }
 
   private persist(): void {
+    // Final safety net for the invariant: state the loader would reject is
+    // never written. Reaching this branch is a bug in a save path above —
+    // the warning is what surfaces it — but the user's stored macros
+    // surviving that bug is the point.
+    if (!isPersistableState(this.state)) {
+      console.warn('[superdoc-macros] refusing to persist state that would fail to load');
+      return;
+    }
     this.storage.save(this.state);
   }
+}
+
+/**
+ * A recorded insert-text step can exceed the loader's per-step cap (one huge
+ * paste coalesces into one step). Splitting preserves the exact text while
+ * keeping the recording loadable.
+ */
+function splitOversizedSteps(steps: MacroStep[]): MacroStep[] {
+  const max = IMPORT_LIMITS.maxTextLength;
+  const split = steps.flatMap((step) => {
+    if (step.type !== 'insert-text' || step.text.length <= max) return [step];
+    const chunks: MacroStep[] = [];
+    for (let offset = 0; offset < step.text.length; offset += max) {
+      chunks.push({ type: 'insert-text', text: step.text.slice(offset, offset + max) });
+    }
+    return chunks;
+  });
+
+  // Splitting can push a cap-length recording past the loader's step limit.
+  // Truncating the tail is the honest option left: the alternative is a
+  // recording the loader rejects, which loses the whole store's worth more.
+  if (split.length > IMPORT_LIMITS.maxStepsPerRecording) {
+    console.warn('[superdoc-macros] recording truncated to the step limit');
+    return split.slice(0, IMPORT_LIMITS.maxStepsPerRecording);
+  }
+  return split;
 }

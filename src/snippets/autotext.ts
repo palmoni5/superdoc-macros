@@ -17,13 +17,23 @@
 import type { MacroHost, Snippet, TextInputEvent } from '../types.js';
 import { renderSnippet, usesSelection } from './snippets.js';
 
+/** What an expansion actually did — what a recorder needs to stay truthful. */
+export interface AutoTextExpansion {
+  /** The trigger word the user typed. */
+  trigger: string;
+  /** The character that fired the expansion (and was restored at the end). */
+  expandChar: string;
+  /** The rendered snippet text that replaced the trigger. */
+  rendered: string;
+}
+
 export interface AutoTextOptions {
   /** The expansion characters. Default: space only. */
   expandOn?: readonly string[];
   /** Buffer size. A trigger word longer than this will not be recognized. */
   bufferSize?: number;
   /** Called after a successful expansion. */
-  onExpand?: (snippet: Snippet) => void;
+  onExpand?: (snippet: Snippet, expansion: AutoTextExpansion) => void;
   /** Called when an expansion failed (e.g. a read-only document). */
   onError?: (message: string) => void;
 }
@@ -35,7 +45,7 @@ export class AutoText {
   private readonly getSnippets: () => readonly Snippet[];
   private readonly expandOn: ReadonlySet<string>;
   private readonly bufferSize: number;
-  private readonly onExpand?: (snippet: Snippet) => void;
+  private readonly onExpand?: (snippet: Snippet, expansion: AutoTextExpansion) => void;
   private readonly onError?: (message: string) => void;
 
   private buffer = '';
@@ -131,7 +141,7 @@ export class AutoText {
         this.onError?.(inserted.message);
         return;
       }
-      this.onExpand?.(snippet);
+      this.onExpand?.(snippet, { trigger, expandChar, rendered });
     } finally {
       this.busy = false;
     }

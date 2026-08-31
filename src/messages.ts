@@ -39,7 +39,13 @@ export interface MacroMessages {
   snippetNotFound: string;
   cannotRunWhileRecording: string;
   anotherMacroRunning: string;
+  scriptsDisabled: string;
+  nameRequired: string;
   invalidImport: string;
+  importRejectedShortcut: (itemName: string, detail: string) => string;
+  importTooLarge: string;
+  tooManyItems: string;
+  fieldTooLong: (field: string, max: number) => string;
 
   /* Shortcut validation */
   shortcutInvalid: string;
@@ -76,7 +82,14 @@ export const ENGLISH_MESSAGES: MacroMessages = {
   snippetNotFound: 'Snippet not found',
   cannotRunWhileRecording: 'Cannot run a macro while recording',
   anotherMacroRunning: 'Another macro is still running',
+  scriptsDisabled: 'Scripted macros are disabled',
   invalidImport: 'The file is not a valid macro export',
+  importRejectedShortcut: (itemName, detail) =>
+    `Import rejected: the shortcut of "${itemName}" is not acceptable — ${detail}`,
+  importTooLarge: 'Import rejected: the merged result exceeds the item limits',
+  tooManyItems: 'The list is full — delete items before adding new ones',
+  nameRequired: 'A name is required',
+  fieldTooLong: (field, max) => `${field} is too long (limit: ${max} characters)`,
 
   shortcutInvalid: 'Invalid shortcut — use a form like Ctrl+Alt+M',
   shortcutNeedsModifier: 'A shortcut must include Ctrl, Alt or Meta',
@@ -112,7 +125,14 @@ export const HEBREW_MESSAGES: MacroMessages = {
   snippetNotFound: 'הקטע לא נמצא',
   cannotRunWhileRecording: 'אי אפשר להריץ מאקרו בזמן הקלטה',
   anotherMacroRunning: 'מאקרו אחר עדיין רץ',
+  scriptsDisabled: 'מאקרו כתובים מושבתים',
   invalidImport: 'הקובץ אינו ייצוא מאקרו תקין',
+  importRejectedShortcut: (itemName, detail) =>
+    `הייבוא נדחה: הקיצור של "${itemName}" אינו קביל — ${detail}`,
+  importTooLarge: 'הייבוא נדחה: התוצאה הממוזגת חורגת מתקרת הפריטים',
+  tooManyItems: 'הרשימה מלאה — יש למחוק פריטים לפני הוספה',
+  nameRequired: 'חובה לתת שם',
+  fieldTooLong: (field, max) => `${field} ארוך מדי (התקרה: ${max} תווים)`,
 
   shortcutInvalid: 'קיצור לא תקין — הצורה הנדרשת היא למשל Ctrl+Alt+M',
   shortcutNeedsModifier: 'קיצור חייב לכלול Ctrl,‏ Alt או Meta',

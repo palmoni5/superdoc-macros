@@ -23,6 +23,8 @@ export interface FakeHost extends MacroHost {
   typeBackspace(): Promise<void>;
   /** Simulates the user pressing Delete. */
   typeDeleteForward(): Promise<void>;
+  /** Simulates a paste: one multi-character input event, like beforeinput reports it. */
+  typePaste(text: string): Promise<void>;
   /** Simulates a UI-driven command (e.g. a ribbon button) — same path. */
   uiCommand(id: string, payload?: unknown): Promise<MacroOutcome>;
 }
@@ -136,6 +138,11 @@ export function createFakeHost(knownCommands: readonly string[] = DEFAULT_COMMAN
     async typeDeleteForward() {
       emitInput({ kind: 'delete-forward' });
       await host.deleteForward(1);
+    },
+
+    async typePaste(text) {
+      emitInput({ kind: 'insert-text', text });
+      await host.insertText(text);
     },
 
     uiCommand(id, payload) {

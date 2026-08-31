@@ -19,6 +19,13 @@ export interface RecorderOptions {
   shouldRecordCommand?: (id: string) => boolean;
   /** Step cap per recording, against a recording left running by mistake. */
   maxSteps?: number;
+  /**
+   * Called when the step cap stops the recording. The steps are kept —
+   * `stop()` still returns them — but listening has ceased, and a UI that
+   * shows "recording" must be told, or its indicator would keep promising a
+   * recording that is no longer happening.
+   */
+  onAutoStop?: () => void;
 }
 
 const DEFAULT_MAX_STEPS = 5_000;
@@ -32,6 +39,7 @@ export class MacroRecorder {
   private readonly host: MacroHost;
   private readonly shouldRecordCommand: (id: string) => boolean;
   private readonly maxSteps: number;
+  private readonly onAutoStop?: () => void;
 
   private steps: MacroStep[] = [];
   private disposers: Array<() => void> = [];
@@ -41,6 +49,7 @@ export class MacroRecorder {
     this.host = host;
     this.shouldRecordCommand = options.shouldRecordCommand ?? defaultShouldRecord;
     this.maxSteps = options.maxSteps ?? DEFAULT_MAX_STEPS;
+    this.onAutoStop = options.onAutoStop;
   }
 
   get recording(): boolean {
@@ -61,9 +70,12 @@ export class MacroRecorder {
     ];
   }
 
-  /** Stops and returns the steps. Empty when nothing was recorded. */
+  /**
+   * Stops and returns the steps. Empty when nothing was recorded. Also the
+   * way to collect a recording that auto-stopped at the cap — the steps are
+   * kept until someone asks for them.
+   */
   stop(): MacroStep[] {
-    if (!this.active) return [];
     this.teardown();
     const recorded = this.steps;
     this.steps = [];
@@ -72,9 +84,50 @@ export class MacroRecorder {
 
   /** Stops and discards whatever was recorded. */
   cancel(): void {
-    if (!this.active) return;
     this.teardown();
     this.steps = [];
+  }
+
+  /**
+   * Rewrites the recorded tail after an auto-text expansion: the user typed
+   * a trigger word plus the expansion character, but what the document now
+   * holds is the expanded text — a replay of the raw keystrokes would
+   * diverge (and would depend on auto-text being active at replay time).
+   * The trailing `consumed` characters are removed from the recorded
+   * insert-text steps and the expanded text is recorded in their place.
+   *
+   * If the tail does not hold `consumed` plain characters (a command landed
+   * mid-word, or the recording started mid-trigger), the rewrite is skipped
+   * and the raw keystrokes stay — a truthful raw recording beats a guessed
+   * edit of steps that do not match.
+   */
+  applyAutoTextExpansion(consumed: number, replacement: string): void {
+    if (!this.active || consumed <= 0) return;
+
+    // Verify the tail is entirely typed text before touching anything.
+    let remaining = consumed;
+    let index = this.steps.length - 1;
+    while (remaining > 0 && index >= 0) {
+      const step = this.steps[index];
+      if (step?.type !== 'insert-text') return;
+      remaining -= step.text.length;
+      index -= 1;
+    }
+    if (remaining > 0) return;
+
+    let toRemove = consumed;
+    while (toRemove > 0) {
+      const last = this.steps[this.steps.length - 1];
+      if (last?.type !== 'insert-text') return; // unreachable after the check above
+      if (last.text.length > toRemove) {
+        last.text = last.text.slice(0, -toRemove);
+        break;
+      }
+      toRemove -= last.text.length;
+      this.steps.pop();
+    }
+
+    this.recordTextInput({ kind: 'insert-text', text: replacement });
   }
 
   private teardown(): void {
@@ -83,11 +136,13 @@ export class MacroRecorder {
   }
 
   private push(step: MacroStep): void {
-    if (this.steps.length >= this.maxSteps) {
-      this.teardown();
-      return;
-    }
     this.steps.push(step);
+    if (this.steps.length >= this.maxSteps) {
+      // The cap stops the *listening*, not the data: the steps stay for
+      // stop() to collect, and the owner is told the recording ended.
+      this.teardown();
+      this.onAutoStop?.();
+    }
   }
 
   private recordCommand(id: string, payload: unknown): void {

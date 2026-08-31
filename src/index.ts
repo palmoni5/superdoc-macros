@@ -28,7 +28,7 @@ export type { MacroRunner, MacroRunOptions, MacroRunResult } from './scripting/r
 export { MacroRecorder, replayMacro, type RecorderOptions, type ReplayOptions, type ReplayResult } from './recorder/recorder.js';
 
 export { renderSnippet, expandSnippet, usesSelection, type ExpandOptions, type RenderContext } from './snippets/snippets.js';
-export { AutoText, type AutoTextOptions } from './snippets/autotext.js';
+export { AutoText, type AutoTextOptions, type AutoTextExpansion } from './snippets/autotext.js';
 
 export {
   parseShortcut,
@@ -48,6 +48,7 @@ export {
   parsePersistedState,
   DEFAULT_STORAGE_KEY,
   IMPORT_LIMITS,
+  isPersistableState,
   type MacroStorage,
   type PersistedMacroState,
 } from './storage.js';

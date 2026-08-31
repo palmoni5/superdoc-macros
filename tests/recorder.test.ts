@@ -38,6 +38,55 @@ describe('MacroRecorder', () => {
     expect(steps).toEqual([{ type: 'command', id: 'italic' }]);
   });
 
+  it('the step cap auto-stops, notifies, and keeps the steps for stop()', async () => {
+    const host = createFakeHost();
+    let autoStopped = 0;
+    const recorder = new MacroRecorder(host, { maxSteps: 3, onAutoStop: () => (autoStopped += 1) });
+
+    recorder.start();
+    await host.uiCommand('bold');
+    await host.uiCommand('italic');
+    await host.uiCommand('bold');
+    await host.uiCommand('italic'); // past the cap — listening already ceased
+
+    expect(autoStopped).toBe(1);
+    expect(recorder.recording).toBe(false);
+
+    // The steps survive the auto-stop — losing a recording at its cap would
+    // punish exactly the longest recordings.
+    const steps = recorder.stop();
+    expect(steps).toHaveLength(3);
+  });
+
+  it('applyAutoTextExpansion rewrites the typed trigger into the expanded text', async () => {
+    const host = createFakeHost();
+    const recorder = new MacroRecorder(host);
+
+    recorder.start();
+    await host.typeText('לפני בסד ');
+    recorder.applyAutoTextExpansion('בסד '.length, 'בס"ד ');
+
+    expect(recorder.stop()).toEqual([{ type: 'insert-text', text: 'לפני בס"ד ' }]);
+  });
+
+  it('applyAutoTextExpansion skips when the tail is not plain typed text', async () => {
+    const host = createFakeHost();
+    const recorder = new MacroRecorder(host);
+
+    recorder.start();
+    await host.typeText('בס');
+    await host.uiCommand('bold'); // a command lands mid-word — the tail no longer matches
+    await host.typeText('ד ');
+    recorder.applyAutoTextExpansion('בסד '.length, 'בס"ד ');
+
+    // The raw truth stays: a guessed rewrite of non-matching steps is worse.
+    expect(recorder.stop()).toEqual([
+      { type: 'insert-text', text: 'בס' },
+      { type: 'command', id: 'bold' },
+      { type: 'insert-text', text: 'ד ' },
+    ]);
+  });
+
   it('cancel discards the recording and stops listening', async () => {
     const host = createFakeHost();
     const recorder = new MacroRecorder(host);

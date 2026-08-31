@@ -82,6 +82,8 @@ Honest limits: the browser offers no per-iframe memory cap, and a host call that
 
 If you must waive isolation (e.g. a CSP that blocks `srcdoc`), switch to the direct runner: `new MacroKit({ host, runner: 'eval' })` — see the warnings in the code.
 
+**A real off switch:** `new MacroKit({ host, scriptsEnabled: false })` gates script *execution*, not just UI — `runScript`/`runSource` refuse and saved script shortcuts are not bound, so a pre-existing or imported script cannot run through any path. Recordings and snippets are unaffected.
+
 ## 2. Macro recorder
 
 ```ts
@@ -136,7 +138,9 @@ kit.importState(json, { merge: true });
 
 `MacroStorage` is a two-method interface — implement it to persist to a file (e.g. a plugin workspace).
 
-Imports are strictly validated: every item and every recorded step is type-checked and size-bounded (see `IMPORT_LIMITS`), and one invalid item rejects the whole file — no partial imports.
+Imports are strictly validated **atomically on the final result**: every item and every recorded step is type-checked and size-bounded (see `IMPORT_LIMITS`), every shortcut in the merged state must pass the same binding rules the save paths enforce (modifier required, not host-reserved, no duplicates), and any failure rejects the whole file with the current state untouched — no partial imports.
+
+The same limits hold as a persistence invariant: the save paths refuse oversized fields and full lists, an oversized recorded paste is split into loadable steps, and state that the loader would reject is never written — so a single bad save can never wipe the store on the next startup.
 
 ## Shortcut safety
 
