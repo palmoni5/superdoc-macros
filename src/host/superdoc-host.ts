@@ -211,6 +211,27 @@ export function createSuperdocHost(options: SuperdocHostOptions): SuperdocMacroH
     if (typeof data === 'string' && data.length > 0) emitInput({ kind: 'insert-text', text: data });
   };
 
+  /* Caret movement: a click or a navigation key breaks the link between the
+     recently-typed characters and what actually sits before the caret.
+     Auto-text resets its buffer on this, and the recorder stops coalescing
+     across it. Reported as an input event so any MacroHost can supply it. */
+  const NAVIGATION_KEYS = new Set([
+    'ArrowLeft',
+    'ArrowRight',
+    'ArrowUp',
+    'ArrowDown',
+    'Home',
+    'End',
+    'PageUp',
+    'PageDown',
+  ]);
+
+  const onPointerDown = (): void => emitInput({ kind: 'caret-moved' });
+
+  const onKeydown = (event: Event): void => {
+    if (NAVIGATION_KEYS.has((event as KeyboardEvent).key)) emitInput({ kind: 'caret-moved' });
+  };
+
   const onBeforeInput = (event: Event): void => {
     const input = event as InputEvent;
     let mapped: TextInputEvent | null = null;
@@ -253,6 +274,8 @@ export function createSuperdocHost(options: SuperdocHostOptions): SuperdocMacroH
   container?.addEventListener('beforeinput', onBeforeInput, true);
   container?.addEventListener('compositionstart', onCompositionStart, true);
   container?.addEventListener('compositionend', onCompositionEnd, true);
+  container?.addEventListener('pointerdown', onPointerDown, true);
+  container?.addEventListener('keydown', onKeydown, true);
 
   /**
    * `failed: true` means the engine call itself threw — as opposed to a
@@ -407,6 +430,21 @@ export function createSuperdocHost(options: SuperdocHostOptions): SuperdocMacroH
       return (await readSelectionDetailed(options?.includeText ?? false)).snapshot;
     },
 
+    async getTextBefore(count): Promise<string | null> {
+      // Auto-text's verification before it deletes: the answer must reflect
+      // the live document, so `null` (unknown) is the only honest reply when
+      // the view is unavailable — never a guess.
+      const pm = view();
+      if (!pm) return null;
+      try {
+        const { from } = pm.state.selection;
+        const start = Math.max(0, from - Math.max(0, Math.trunc(count)));
+        return pm.state.doc.textBetween(start, from);
+      } catch {
+        return null;
+      }
+    },
+
     async replaceAll(query, replacement) {
       const handle = search();
       if (!handle) return { ok: false, replaced: 0, message: macroMessages().searchUnavailable };
@@ -466,6 +504,8 @@ export function createSuperdocHost(options: SuperdocHostOptions): SuperdocMacroH
       container?.removeEventListener('beforeinput', onBeforeInput, true);
       container?.removeEventListener('compositionstart', onCompositionStart, true);
       container?.removeEventListener('compositionend', onCompositionEnd, true);
+      container?.removeEventListener('pointerdown', onPointerDown, true);
+      container?.removeEventListener('keydown', onKeydown, true);
       commandListeners.clear();
       inputListeners.clear();
     },

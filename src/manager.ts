@@ -13,11 +13,12 @@ import { createIframeRunner } from './scripting/iframe-runner.js';
 import type { MacroRunner, MacroRunOptions, MacroRunResult } from './scripting/runner.js';
 import { MacroRecorder, replayMacro, type ReplayOptions, type ReplayResult } from './recorder/recorder.js';
 import { AutoText, type AutoTextOptions } from './snippets/autotext.js';
-import { expandSnippet, type ExpandOptions } from './snippets/snippets.js';
-import { IMPORT_LIMITS, isPersistableState } from './storage.js';
+import { renderSnippetForHost, type ExpandOptions } from './snippets/snippets.js';
+import { IMPORT_LIMITS, isPersistableState, serializePersistable } from './storage.js';
 import {
   bindShortcuts,
   hasBindingModifier,
+  isBindableKey,
   parseShortcut,
   shortcutSignatures,
   type ShortcutBinding,
@@ -145,6 +146,9 @@ export class MacroKit {
     const parsed = parseShortcut(trimmed);
     if (!parsed) return { ok: false, message: macroMessages().shortcutInvalid };
     if (!hasBindingModifier(parsed)) return { ok: false, message: macroMessages().shortcutNeedsModifier };
+    // Only keys with a physical-code mapping (letters, digits, F-keys):
+    // matching is by event.code, so it survives a Hebrew keyboard layout.
+    if (!isBindableKey(parsed)) return { ok: false, message: macroMessages().shortcutInvalid };
 
     const signatures = shortcutSignatures(parsed);
     if (signatures.some((signature) => this.reservedSignatures.has(signature))) {
@@ -186,7 +190,7 @@ export class MacroKit {
 
   saveScript(input: { id?: string; name: string; source: string; shortcut?: string }): SavedScript {
     this.requireValidShortcut(input.shortcut, input.id);
-    this.requireItemLimits({ name: input.name, source: input.source });
+    this.requireItemLimits({ name: input.name, source: input.source, shortcut: input.shortcut });
     this.requireRoom(this.state.scripts, input.id);
     const script: SavedScript = {
       id: input.id ?? newId(),
@@ -194,14 +198,16 @@ export class MacroKit {
       source: input.source,
       ...(input.shortcut ? { shortcut: input.shortcut } : {}),
     };
-    this.upsert(this.state.scripts, script);
-    this.persist();
-    return script;
+    return this.commit((draft) => {
+      this.upsert(draft.scripts, script);
+      return script;
+    });
   }
 
   removeScript(id: string): void {
-    this.state.scripts = this.state.scripts.filter((script) => script.id !== id);
-    this.persist();
+    this.commit((draft) => {
+      draft.scripts = draft.scripts.filter((script) => script.id !== id);
+    });
   }
 
   async runScript(id: string): Promise<MacroRunResult> {
@@ -244,12 +250,18 @@ export class MacroKit {
     this.recorder.start();
   }
 
-  /** Stops and saves. `null` when no step was recorded — there is nothing to save. */
+  /**
+   * Stops and saves. `null` when no step was recorded — there is nothing to
+   * save. Throws when the recording cannot be saved *whole* (its splittable
+   * steps still exceed the loader's step cap): a silently partial macro
+   * would replay something other than what the user did.
+   */
   stopRecording(name: string, shortcut?: string): RecordedMacro | null {
     this.requireValidShortcut(shortcut);
-    this.requireItemLimits({ name });
+    this.requireItemLimits({ name, shortcut });
     this.requireRoom(this.state.recordings);
-    const steps: MacroStep[] = splitOversizedSteps(this.recorder.stop());
+    const { steps, truncated } = splitOversizedSteps(this.recorder.stop());
+    if (truncated) throw new MacroError(macroMessages().recordingTooLarge, 'recording-too-large');
     if (steps.length === 0) return null;
 
     const recording: RecordedMacro = {
@@ -260,9 +272,10 @@ export class MacroKit {
       ...(shortcut ? { shortcut } : {}),
       steps,
     };
-    this.state.recordings.push(recording);
-    this.persist();
-    return recording;
+    return this.commit((draft) => {
+      draft.recordings.push(recording);
+      return recording;
+    });
   }
 
   cancelRecording(): void {
@@ -274,23 +287,25 @@ export class MacroKit {
   }
 
   removeRecording(id: string): void {
-    this.state.recordings = this.state.recordings.filter((recording) => recording.id !== id);
-    this.persist();
+    this.commit((draft) => {
+      draft.recordings = draft.recordings.filter((recording) => recording.id !== id);
+    });
   }
 
   /** Renames a recording or edits its shortcut. `null` when the recording was not found. */
   updateRecording(input: { id: string; name?: string; shortcut?: string }): RecordedMacro | null {
-    const recording = this.state.recordings.find((entry) => entry.id === input.id);
-    if (!recording) return null;
+    if (!this.state.recordings.some((entry) => entry.id === input.id)) return null;
     if (input.shortcut !== undefined) this.requireValidShortcut(input.shortcut, input.id);
-    if (input.name !== undefined) this.requireItemLimits({ name: input.name });
-    if (input.name !== undefined) recording.name = input.name;
-    if (input.shortcut !== undefined) {
-      if (input.shortcut) recording.shortcut = input.shortcut;
-      else delete recording.shortcut;
-    }
-    this.persist();
-    return recording;
+    if (input.name !== undefined) this.requireItemLimits({ name: input.name, shortcut: input.shortcut });
+    return this.commit((draft) => {
+      const recording = draft.recordings.find((entry) => entry.id === input.id)!;
+      if (input.name !== undefined) recording.name = input.name;
+      if (input.shortcut !== undefined) {
+        if (input.shortcut) recording.shortcut = input.shortcut;
+        else delete recording.shortcut;
+      }
+      return recording;
+    });
   }
 
   async replayRecording(id: string, options?: ReplayOptions): Promise<ReplayResult> {
@@ -324,7 +339,12 @@ export class MacroKit {
 
   saveSnippet(input: { id?: string; name: string; text: string; trigger?: string; shortcut?: string }): Snippet {
     this.requireValidShortcut(input.shortcut, input.id);
-    this.requireItemLimits({ name: input.name, text: input.text, trigger: input.trigger });
+    this.requireItemLimits({
+      name: input.name,
+      text: input.text,
+      trigger: input.trigger,
+      shortcut: input.shortcut,
+    });
     this.requireRoom(this.state.snippets, input.id);
     const snippet: Snippet = {
       id: input.id ?? newId(),
@@ -333,21 +353,32 @@ export class MacroKit {
       ...(input.trigger ? { trigger: input.trigger } : {}),
       ...(input.shortcut ? { shortcut: input.shortcut } : {}),
     };
-    this.upsert(this.state.snippets, snippet);
-    this.persist();
-    return snippet;
+    return this.commit((draft) => {
+      this.upsert(draft.snippets, snippet);
+      return snippet;
+    });
   }
 
   removeSnippet(id: string): void {
-    this.state.snippets = this.state.snippets.filter((snippet) => snippet.id !== id);
-    this.persist();
+    this.commit((draft) => {
+      draft.snippets = draft.snippets.filter((snippet) => snippet.id !== id);
+    });
   }
 
   async expandSnippet(id: string, options?: ExpandOptions): Promise<{ ok: boolean; message?: string }> {
     const snippet = this.state.snippets.find((entry) => entry.id === id);
     if (!snippet) return { ok: false, message: macroMessages().snippetNotFound };
-    const outcome = await expandSnippet(this.host, snippet, options);
-    return outcome.ok ? { ok: true } : { ok: false, message: outcome.message };
+
+    const rendered = await renderSnippetForHost(this.host, snippet, options);
+    const outcome = await this.host.insertText(rendered);
+    if (!outcome.ok) return { ok: false, message: outcome.message };
+
+    // A snippet expanded from a button or shortcut writes through the
+    // document API and fires no typing events — recorded explicitly, or a
+    // replay would silently miss text the user watched appear. The auto-text
+    // path needs nothing here: its expansion rewrites the typed tail.
+    this.recorder.recordInsert(rendered);
+    return { ok: true };
   }
 
   /** Enables auto-text (trigger + space). Returns a disable function. */
@@ -432,8 +463,11 @@ export class MacroKit {
     const shortcutsOk = this.validateStateShortcuts(candidate);
     if (!shortcutsOk.ok) return shortcutsOk;
 
-    this.state = candidate;
-    this.persist();
+    try {
+      this.adopt(candidate);
+    } catch (error) {
+      return { ok: false, message: error instanceof Error ? error.message : macroMessages().saveFailed };
+    }
     return { ok: true };
   }
 
@@ -494,11 +528,20 @@ export class MacroKit {
    * save would make the whole store unloadable — and the next startup would
    * silently fall back to an empty state, losing everything.
    */
-  private requireItemLimits(fields: { name: string; text?: string; source?: string; trigger?: string }): void {
+  private requireItemLimits(fields: {
+    name: string;
+    text?: string;
+    source?: string;
+    trigger?: string;
+    shortcut?: string;
+  }): void {
     const limits = IMPORT_LIMITS;
     if (fields.name.length === 0) throw new MacroError(macroMessages().nameRequired, 'invalid-item');
     if (fields.name.length > limits.maxNameLength) {
       throw new MacroError(macroMessages().fieldTooLong('name', limits.maxNameLength), 'invalid-item');
+    }
+    if (fields.shortcut !== undefined && fields.shortcut.length > limits.maxShortcutLength) {
+      throw new MacroError(macroMessages().fieldTooLong('shortcut', limits.maxShortcutLength), 'invalid-item');
     }
     if (fields.text !== undefined && fields.text.length > limits.maxTextLength) {
       throw new MacroError(macroMessages().fieldTooLong('text', limits.maxTextLength), 'invalid-item');
@@ -525,25 +568,46 @@ export class MacroKit {
     else list.push(item);
   }
 
-  private persist(): void {
-    // Final safety net for the invariant: state the loader would reject is
-    // never written. Reaching this branch is a bug in a save path above —
-    // the warning is what surfaces it — but the user's stored macros
-    // surviving that bug is the point.
-    if (!isPersistableState(this.state)) {
-      console.warn('[superdoc-macros] refusing to persist state that would fail to load');
-      return;
+  /**
+   * Applies a mutation transactionally: the change runs on a clone, and the
+   * clone becomes the state only through `adopt` — validation and storage
+   * included. A failure at any stage leaves the previous state fully
+   * intact. Before this, the in-memory state mutated first and a quota
+   * failure left memory and disk silently disagreeing until the next
+   * successful save rewrote history.
+   */
+  private commit<T>(mutate: (draft: PersistedMacroState) => T): T {
+    const draft = JSON.parse(JSON.stringify(this.state)) as PersistedMacroState;
+    const result = mutate(draft);
+    this.adopt(draft);
+    return result;
+  }
+
+  /**
+   * The persistence invariant, in one place: a candidate becomes the state
+   * only if it serializes under the loader's exact rules (shape, field
+   * caps, whole-file size) *and* the storage actually accepted it.
+   */
+  private adopt(candidate: PersistedMacroState): void {
+    if (serializePersistable(candidate) === null) {
+      throw new MacroError(macroMessages().saveFailed, 'invalid-state');
     }
-    this.storage.save(this.state);
+    if (!this.storage.save(candidate)) {
+      throw new MacroError(macroMessages().saveFailed, 'storage-failed');
+    }
+    this.state = candidate;
   }
 }
 
 /**
  * A recorded insert-text step can exceed the loader's per-step cap (one huge
  * paste coalesces into one step). Splitting preserves the exact text while
- * keeping the recording loadable.
+ * keeping the recording loadable. `truncated` reports the pathological case
+ * where even the split exceeds the loader's step limit — the caller refuses
+ * to save then, with a message: a silently partial macro is worse than no
+ * macro.
  */
-function splitOversizedSteps(steps: MacroStep[]): MacroStep[] {
+function splitOversizedSteps(steps: MacroStep[]): { steps: MacroStep[]; truncated: boolean } {
   const max = IMPORT_LIMITS.maxTextLength;
   const split = steps.flatMap((step) => {
     if (step.type !== 'insert-text' || step.text.length <= max) return [step];
@@ -554,12 +618,5 @@ function splitOversizedSteps(steps: MacroStep[]): MacroStep[] {
     return chunks;
   });
 
-  // Splitting can push a cap-length recording past the loader's step limit.
-  // Truncating the tail is the honest option left: the alternative is a
-  // recording the loader rejects, which loses the whole store's worth more.
-  if (split.length > IMPORT_LIMITS.maxStepsPerRecording) {
-    console.warn('[superdoc-macros] recording truncated to the step limit');
-    return split.slice(0, IMPORT_LIMITS.maxStepsPerRecording);
-  }
-  return split;
+  return { steps: split, truncated: split.length > IMPORT_LIMITS.maxStepsPerRecording };
 }

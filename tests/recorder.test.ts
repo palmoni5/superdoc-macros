@@ -26,6 +26,23 @@ describe('MacroRecorder', () => {
     ]);
   });
 
+  it('a caret move records no step but breaks coalescing', async () => {
+    const host = createFakeHost();
+    const recorder = new MacroRecorder(host);
+
+    recorder.start();
+    await host.typeText('אב');
+    host.typeCaretMove(0);
+    await host.typeText('גד');
+    const steps = recorder.stop();
+
+    // Text typed at a new position is not a continuation of the old text.
+    expect(steps).toEqual([
+      { type: 'insert-text', text: 'אב' },
+      { type: 'insert-text', text: 'גד' },
+    ]);
+  });
+
   it('does not record undo/redo by default', async () => {
     const host = createFakeHost();
     const recorder = new MacroRecorder(host);

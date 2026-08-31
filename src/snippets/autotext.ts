@@ -94,6 +94,12 @@ export class AutoText {
       case 'delete-forward':
         this.buffer = '';
         return;
+      // A click or navigation key moved the caret: the buffer no longer
+      // describes what sits before it, and expanding on it would delete
+      // text at the new position. Missing an expansion is the cheap error.
+      case 'caret-moved':
+        this.buffer = '';
+        return;
       case 'delete-backward':
         this.buffer = this.buffer.slice(0, -1);
         return;
@@ -124,6 +130,15 @@ export class AutoText {
       // to the document. Deferring to the task queue guarantees the expansion
       // character is already in before it is deleted along with the trigger.
       await new Promise<void>((resolve) => setTimeout(resolve, 0));
+
+      // Second line of defense, independent of the event stream: the
+      // document itself must hold the trigger right before the caret. A
+      // caret move the host failed to report (or a race with another
+      // writer) is caught here instead of deleting foreign text.
+      const expected = trigger + expandChar;
+      const actual = await this.host.getTextBefore?.(expected.length);
+      if (typeof actual === 'string' && actual !== expected) return;
+
       const selectionText = usesSelection(snippet.text)
         ? (await this.host.getSelection({ includeText: true })).text
         : undefined;

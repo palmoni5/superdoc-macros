@@ -46,6 +46,8 @@ export interface MacroMessages {
   importTooLarge: string;
   tooManyItems: string;
   fieldTooLong: (field: string, max: number) => string;
+  saveFailed: string;
+  recordingTooLarge: string;
 
   /* Shortcut validation */
   shortcutInvalid: string;
@@ -90,6 +92,8 @@ export const ENGLISH_MESSAGES: MacroMessages = {
   tooManyItems: 'The list is full — delete items before adding new ones',
   nameRequired: 'A name is required',
   fieldTooLong: (field, max) => `${field} is too long (limit: ${max} characters)`,
+  saveFailed: 'Saving failed — the change was not applied',
+  recordingTooLarge: 'The recording is too large to save',
 
   shortcutInvalid: 'Invalid shortcut — use a form like Ctrl+Alt+M',
   shortcutNeedsModifier: 'A shortcut must include Ctrl, Alt or Meta',
@@ -133,6 +137,8 @@ export const HEBREW_MESSAGES: MacroMessages = {
   tooManyItems: 'הרשימה מלאה — יש למחוק פריטים לפני הוספה',
   nameRequired: 'חובה לתת שם',
   fieldTooLong: (field, max) => `${field} ארוך מדי (התקרה: ${max} תווים)`,
+  saveFailed: 'השמירה נכשלה — השינוי לא הוחל',
+  recordingTooLarge: 'ההקלטה גדולה מכדי להישמר',
 
   shortcutInvalid: 'קיצור לא תקין — הצורה הנדרשת היא למשל Ctrl+Alt+M',
   shortcutNeedsModifier: 'קיצור חייב לכלול Ctrl,‏ Alt או Meta',

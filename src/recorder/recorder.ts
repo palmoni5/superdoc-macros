@@ -12,6 +12,7 @@
  * What is not recorded: caret movement and mouse selection. As in Word, a
  * recorded macro acts from wherever the caret stands when it runs.
  */
+import { IMPORT_LIMITS } from '../storage.js';
 import type { MacroHost, MacroOutcome, MacroStep, TextInputEvent } from '../types.js';
 
 export interface RecorderOptions {
@@ -44,6 +45,12 @@ export class MacroRecorder {
   private steps: MacroStep[] = [];
   private disposers: Array<() => void> = [];
   private active = false;
+  /**
+   * Set by a caret move: the next typed character starts a fresh step
+   * instead of coalescing — text typed at a new position is not a
+   * continuation of the text typed at the old one.
+   */
+  private tailInterrupted = false;
 
   constructor(host: MacroHost, options: RecorderOptions = {}) {
     this.host = host;
@@ -145,18 +152,48 @@ export class MacroRecorder {
     }
   }
 
+  /**
+   * Records a programmatic insertion the host will not report as typing —
+   * e.g. a snippet expanded from a button or shortcut, which writes through
+   * the document API and never fires beforeinput. Without this, a replay
+   * would silently miss text the user watched appear.
+   */
+  recordInsert(text: string): void {
+    if (!this.active || text.length === 0) return;
+    this.recordTextInput({ kind: 'insert-text', text });
+  }
+
   private recordCommand(id: string, payload: unknown): void {
     if (!this.shouldRecordCommand(id)) return;
-    this.push(payload === undefined ? { type: 'command', id } : { type: 'command', id, payload });
+    if (payload === undefined) {
+      this.push({ type: 'command', id });
+      return;
+    }
+    // The payload is opaque engine data, but not unlimited: it must survive
+    // a JSON round-trip within the persistence cap, or the recording would
+    // be rejected by the loader. A command whose payload cannot be kept
+    // faithfully is skipped whole — replaying it with a mangled payload
+    // would do something other than what was recorded.
+    let json: string | undefined;
+    try {
+      json = JSON.stringify(payload);
+    } catch {
+      return;
+    }
+    if (typeof json !== 'string' || json.length > IMPORT_LIMITS.maxPayloadLength) return;
+    this.push({ type: 'command', id, payload: JSON.parse(json) });
   }
 
   private recordTextInput(event: TextInputEvent): void {
+    const interrupted = this.tailInterrupted;
+    this.tailInterrupted = false;
     const last = this.steps[this.steps.length - 1];
 
     switch (event.kind) {
       case 'insert-text': {
-        // Consecutive keystrokes coalesce into one step — more readable, faster to replay.
-        if (last?.type === 'insert-text') {
+        // Consecutive keystrokes coalesce into one step — more readable,
+        // faster to replay — but never across a caret move.
+        if (!interrupted && last?.type === 'insert-text') {
           last.text += event.text;
           return;
         }
@@ -167,7 +204,7 @@ export class MacroRecorder {
         this.push({ type: 'insert-paragraph' });
         return;
       case 'delete-backward': {
-        if (last?.type === 'delete-backward') {
+        if (!interrupted && last?.type === 'delete-backward') {
           last.count += 1;
           return;
         }
@@ -175,13 +212,18 @@ export class MacroRecorder {
         return;
       }
       case 'delete-forward': {
-        if (last?.type === 'delete-forward') {
+        if (!interrupted && last?.type === 'delete-forward') {
           last.count += 1;
           return;
         }
         this.push({ type: 'delete-forward', count: 1 });
         return;
       }
+      case 'caret-moved':
+        // Not a step — replay acts from the live caret — but the recorded
+        // tail is no longer "where the user is typing".
+        this.tailInterrupted = true;
+        return;
     }
   }
 }

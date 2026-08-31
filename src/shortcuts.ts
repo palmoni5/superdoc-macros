@@ -17,10 +17,16 @@ export interface ParsedShortcut {
 /** The subset of KeyboardEvent that matching needs. Enables DOM-free tests. */
 export interface KeyEventLike {
   key: string;
+  /** The physical key. When present, letters and digits match by it — see `eventMatches`. */
+  code?: string;
   ctrlKey: boolean;
   altKey: boolean;
   shiftKey: boolean;
   metaKey: boolean;
+  /** Key held down — auto-repeat must not re-fire a macro. */
+  repeat?: boolean;
+  /** Mid-IME-composition — keys belong to the composition, not to bindings. */
+  isComposing?: boolean;
   preventDefault?(): void;
   stopPropagation?(): void;
 }
@@ -72,8 +78,38 @@ function normalizeKey(key: string): string {
   return lower;
 }
 
+/**
+ * The physical `event.code` values a binding key stands for. Letters and
+ * digits get a deterministic mapping; anything else returns empty and falls
+ * back to `event.key`.
+ *
+ * Physical-key matching is what keeps a binding alive across keyboard
+ * layouts: on a Hebrew layout Ctrl+Alt+R reports `key: 'ר'`, and a
+ * key-based match would die the moment the user switches to Hebrew — the
+ * exact bug the host editor once had with its own shortcuts.
+ */
+export function codesForKey(key: string): readonly string[] {
+  if (/^[a-z]$/.test(key)) return [`Key${key.toUpperCase()}`];
+  if (/^[0-9]$/.test(key)) return [`Digit${key}`, `Numpad${key}`];
+  if (/^f([1-9]|1[0-2])$/.test(key)) return [key.toUpperCase()];
+  if (key === ' ') return ['Space'];
+  if (key === 'escape') return ['Escape'];
+  return [];
+}
+
+/** Whether the key can be bound reliably (has a physical-code mapping). */
+export function isBindableKey(parsed: ParsedShortcut): boolean {
+  return codesForKey(parsed.key).length > 0;
+}
+
 export function eventMatches(parsed: ParsedShortcut, event: KeyEventLike): boolean {
-  if (normalizeKey(event.key) !== parsed.key) return false;
+  const codes = codesForKey(parsed.key);
+  const keyMatched = normalizeKey(event.key) === parsed.key;
+  // The physical code decides whenever both sides have one; `event.key` is
+  // the fallback for keys with no mapping or hosts that do not report codes.
+  const matched =
+    codes.length > 0 && event.code !== undefined ? codes.includes(event.code) : keyMatched;
+  if (!matched) return false;
 
   if (parsed.mod) {
     if (!event.ctrlKey && !event.metaKey) return false;
@@ -126,6 +162,9 @@ export interface ShortcutTarget {
  */
 export function bindShortcuts(target: ShortcutTarget, getBindings: () => readonly ShortcutBinding[]): () => void {
   const listener = (event: KeyboardEvent): void => {
+    // Auto-repeat must not replay a macro per repeat tick, and keys mid-IME
+    // composition belong to the composition.
+    if (event.repeat || event.isComposing) return;
     for (const binding of getBindings()) {
       const parsed = parseShortcut(binding.shortcut);
       if (!parsed || !eventMatches(parsed, event)) continue;

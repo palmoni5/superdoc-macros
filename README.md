@@ -140,11 +140,11 @@ kit.importState(json, { merge: true });
 
 Imports are strictly validated **atomically on the final result**: every item and every recorded step is type-checked and size-bounded (see `IMPORT_LIMITS`), every shortcut in the merged state must pass the same binding rules the save paths enforce (modifier required, not host-reserved, no duplicates), and any failure rejects the whole file with the current state untouched — no partial imports.
 
-The same limits hold as a persistence invariant: the save paths refuse oversized fields and full lists, an oversized recorded paste is split into loadable steps, and state that the loader would reject is never written — so a single bad save can never wipe the store on the next startup.
+The same limits hold as a persistence invariant, transactionally: every mutation runs on a clone that must serialize under the loader's exact rules (shape, field caps, whole-file size) *and* be accepted by the storage before it becomes the state — a quota failure or an oversized save leaves memory and disk agreeing on the previous state, and can never wipe the store on the next startup. An oversized recorded paste is split into loadable steps; a recording that cannot be saved whole is refused with a message rather than saved partially.
 
 ## Shortcut safety
 
-Saved bindings go through `kit.validateShortcut(shortcut, excludeId?)` — enforced on every save: a binding must parse, must carry a real modifier (Ctrl/Alt/Meta — a bare letter would fire on ordinary typing), must not collide with another saved item, and must not collide with shortcuts the host declared as reserved:
+Saved bindings go through `kit.validateShortcut(shortcut, excludeId?)` — enforced on every save and on the merged result of every import: a binding must parse, must carry a real modifier (Ctrl/Alt/Meta — a bare letter would fire on ordinary typing), must use a physically-mappable key (letters, digits, F-keys — matching is by `event.code`, so bindings survive non-Latin keyboard layouts), must not collide with another saved item, and must not collide with shortcuts the host declared as reserved. Auto-repeat and keys mid-IME-composition never fire bindings:
 
 ```ts
 const kit = new MacroKit({ host, reservedShortcuts: ['Ctrl+S', 'Ctrl+P', /* … the editor's registry … */] });

@@ -291,6 +291,66 @@ describe('MacroKit — atomic import validation', () => {
   });
 });
 
+describe('MacroKit — transactional persistence', () => {
+  it('a storage failure leaves the in-memory state untouched', () => {
+    const host = createFakeHost();
+    let accept = true;
+    const kit = new MacroKit({
+      host,
+      runner: 'eval',
+      storage: { load: () => null, save: () => accept },
+    });
+
+    kit.saveSnippet({ name: 'ראשון', text: 'x' });
+    accept = false; // quota exceeded from here on
+
+    expect(() => kit.saveSnippet({ name: 'שני', text: 'y' })).toThrow();
+    // Memory and disk still agree: the rejected change is nowhere.
+    expect(kit.listSnippets().map((snippet) => snippet.name)).toEqual(['ראשון']);
+  });
+
+  it('a bindable-key restriction applies: Enter cannot be a saved binding', () => {
+    const { kit } = createKit();
+    expect(kit.validateShortcut('Ctrl+Enter').ok).toBe(false);
+    expect(kit.validateShortcut('Ctrl+Alt+F5').ok).toBe(true);
+  });
+
+  it('a command with an unserializable or oversized payload is not recorded', async () => {
+    const { kit, host } = createKit();
+
+    kit.startRecording();
+    const cyclic: Record<string, unknown> = {};
+    cyclic.self = cyclic;
+    await host.uiCommand('bold', cyclic);
+    await host.uiCommand('font-size', { value: 'x'.repeat(20_000) });
+    await host.uiCommand('italic', { value: 12 });
+    const recording = kit.stopRecording('פקודות');
+
+    expect(recording!.steps).toEqual([{ type: 'command', id: 'italic', payload: { value: 12 } }]);
+  });
+});
+
+describe('MacroKit — snippet insertion during recording', () => {
+  it('a snippet expanded from a button/shortcut is recorded and replays', async () => {
+    const { kit, host } = createKit();
+    const snippet = kit.saveSnippet({ name: 'ברכה', text: 'בעזרת השם' });
+
+    kit.startRecording();
+    await host.typeText('פתיח: ');
+    await kit.expandSnippet(snippet.id);
+    const recording = kit.stopRecording('עם קטע');
+
+    expect(host.text).toBe('פתיח: בעזרת השם');
+    expect(recording!.steps).toEqual([{ type: 'insert-text', text: 'פתיח: בעזרת השם' }]);
+
+    host.text = '';
+    host.cursor = 0;
+    const result = await kit.replayRecording(recording!.id);
+    expect(result.ok).toBe(true);
+    expect(host.text).toBe('פתיח: בעזרת השם');
+  });
+});
+
 describe('MacroKit — auto-text during recording', () => {
   it('records the expanded text, not the raw trigger', async () => {
     const { kit, host } = createKit();

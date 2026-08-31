@@ -107,6 +107,31 @@ describe('AutoText', () => {
     expect(host.text).toBe('בסד\n ');
   });
 
+  it('a caret move resets the buffer — no expansion at the new position', async () => {
+    const { host } = setup([{ trigger: 'בסד', text: 'בס"ד' }]);
+
+    await host.typeText('בסד');
+    host.typeCaretMove(0); // click elsewhere
+    await host.typeText(' ');
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    // The space landed at the new caret; nothing was deleted anywhere.
+    expect(host.text).toBe(' בסד');
+  });
+
+  it('the document is verified before deleting — a silent caret move is caught', async () => {
+    const { host } = setup([{ trigger: 'בסד', text: 'בס"ד' }]);
+
+    await host.typeText('בסד');
+    // The caret moves without any event reaching the host (the failure mode
+    // the buffer alone cannot see) — the text-before-caret check catches it.
+    host.cursor = 0;
+    await host.typeText(' ');
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(host.text).toBe(' בסד');
+  });
+
   it('detach stops expansion', async () => {
     const { host, autoText } = setup([{ trigger: 'בסד', text: 'בס"ד' }]);
     autoText.detach();

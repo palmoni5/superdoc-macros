@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import { bindShortcuts, eventMatches, parseShortcut, type ShortcutTarget } from '../src/shortcuts.js';
 
-function keyEvent(overrides: Partial<{ key: string; ctrlKey: boolean; altKey: boolean; shiftKey: boolean; metaKey: boolean }>) {
+function keyEvent(
+  overrides: Partial<{ key: string; code: string; ctrlKey: boolean; altKey: boolean; shiftKey: boolean; metaKey: boolean }>,
+) {
   return {
     key: 'a',
     ctrlKey: false,
@@ -45,6 +47,16 @@ describe('parseShortcut + eventMatches', () => {
     expect(parseShortcut('Ctrl+')).toBeNull();
     expect(parseShortcut('A+B')).toBeNull();
   });
+
+  it('matches by physical code — a Hebrew layout reports key ר for KeyR', () => {
+    const parsed = parseShortcut('Ctrl+Alt+R')!;
+
+    expect(eventMatches(parsed, keyEvent({ key: 'ר', code: 'KeyR', ctrlKey: true, altKey: true }))).toBe(true);
+    // The physical key decides: a matching key on the wrong physical key is not a match.
+    expect(eventMatches(parsed, keyEvent({ key: 'r', code: 'KeyT', ctrlKey: true, altKey: true }))).toBe(false);
+    // Hosts that report no code fall back to the key.
+    expect(eventMatches(parsed, keyEvent({ key: 'R', ctrlKey: true, altKey: true }))).toBe(true);
+  });
 });
 
 describe('bindShortcuts', () => {
@@ -73,5 +85,25 @@ describe('bindShortcuts', () => {
 
     unbind();
     expect(captured.keydown).toBeNull();
+  });
+
+  it('auto-repeat and IME composition do not fire bindings', () => {
+    const captured: { keydown: ((event: unknown) => void) | null } = { keydown: null };
+    const target: ShortcutTarget = {
+      addEventListener: (_type, listener) => {
+        captured.keydown = listener as (event: unknown) => void;
+      },
+      removeEventListener: () => undefined,
+    };
+
+    const runs: string[] = [];
+    bindShortcuts(target, () => [{ shortcut: 'Ctrl+1', run: () => void runs.push('ran') }]);
+
+    captured.keydown?.({ ...keyEvent({ key: '1', ctrlKey: true }), repeat: true });
+    captured.keydown?.({ ...keyEvent({ key: '1', ctrlKey: true }), isComposing: true });
+    expect(runs).toEqual([]);
+
+    captured.keydown?.(keyEvent({ key: '1', ctrlKey: true }));
+    expect(runs).toEqual(['ran']);
   });
 });

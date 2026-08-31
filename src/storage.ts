@@ -15,7 +15,12 @@ export interface PersistedMacroState {
 export interface MacroStorage {
   /** `null` when there is no saved state or the saved state is unreadable. */
   load(): PersistedMacroState | null;
-  save(state: PersistedMacroState): void;
+  /**
+   * Persists the state. Returns whether it actually landed — quota and
+   * serialization failures come back as `false`, never as a throw, so the
+   * caller can refuse to adopt an in-memory change its storage rejected.
+   */
+  save(state: PersistedMacroState): boolean;
 }
 
 export function emptyState(): PersistedMacroState {
@@ -39,6 +44,8 @@ export const IMPORT_LIMITS = {
   /** Snippet text and single recorded insert-text step. */
   maxTextLength: 100_000,
   maxSourceLength: 200_000,
+  /** A recorded command payload, serialized. Engine payloads are small config objects. */
+  maxPayloadLength: 10_000,
 } as const;
 
 function boundedString(value: unknown, maxLength: number, allowEmpty = false): value is string {
@@ -49,13 +56,24 @@ function optionalBoundedString(value: unknown, maxLength: number): boolean {
   return value === undefined || boundedString(value, maxLength);
 }
 
+/** Whether a recorded payload is JSON-clean and bounded. Opaque otherwise — but not unlimited. */
+function isValidPayload(payload: unknown): boolean {
+  if (payload === undefined) return true;
+  let json: string | undefined;
+  try {
+    json = JSON.stringify(payload);
+  } catch {
+    return false;
+  }
+  return typeof json === 'string' && json.length <= IMPORT_LIMITS.maxPayloadLength;
+}
+
 function isValidStep(value: unknown): boolean {
   if (typeof value !== 'object' || value === null) return false;
   const step = value as Record<string, unknown>;
   switch (step.type) {
     case 'command':
-      // The payload is opaque engine data; the id is what replay dispatches on.
-      return boundedString(step.id, IMPORT_LIMITS.maxNameLength);
+      return boundedString(step.id, IMPORT_LIMITS.maxNameLength) && isValidPayload(step.payload);
     case 'insert-text':
       return boundedString(step.text, IMPORT_LIMITS.maxTextLength, true);
     case 'insert-paragraph':
@@ -124,13 +142,26 @@ function isValidState(value: unknown): value is PersistedMacroState {
 }
 
 /**
- * Whether a state object passes the exact validation the loader applies.
- * The save paths hold this as an invariant: state that would be rejected on
- * the next load must never be persisted — otherwise a single oversized save
- * silently wipes everything at the next startup.
+ * Serializes state iff it passes the exact validation the loader applies —
+ * including the whole-file size cap the loader enforces on read. `null`
+ * otherwise. The save paths hold this as an invariant: state that would be
+ * rejected on the next load must never be persisted — otherwise a single
+ * oversized save silently wipes everything at the next startup.
  */
+export function serializePersistable(value: unknown): string | null {
+  if (!isValidState(value)) return null;
+  let json: string;
+  try {
+    json = JSON.stringify(value);
+  } catch {
+    return null;
+  }
+  return json.length <= IMPORT_LIMITS.maxJsonLength ? json : null;
+}
+
+/** Whether `serializePersistable` would accept the state. */
 export function isPersistableState(value: unknown): value is PersistedMacroState {
-  return isValidState(value);
+  return serializePersistable(value) !== null;
 }
 
 /**
@@ -176,9 +207,15 @@ export function createLocalStorage(
     },
     save(state) {
       try {
-        backing()?.setItem(key, JSON.stringify(state));
+        const store = backing();
+        if (!store) return false;
+        store.setItem(key, JSON.stringify(state));
+        return true;
       } catch (error) {
+        // Quota or serialization — reported, not swallowed: the caller must
+        // know the change did not land.
         console.warn('[superdoc-macros] saving macros failed', error);
+        return false;
       }
     },
   };
@@ -191,6 +228,7 @@ export function createMemoryStorage(): MacroStorage {
     load: () => (saved ? (JSON.parse(JSON.stringify(saved)) as PersistedMacroState) : null),
     save(state) {
       saved = JSON.parse(JSON.stringify(state)) as PersistedMacroState;
+      return true;
     },
   };
 }

@@ -56,23 +56,33 @@ export interface ExpandOptions {
   locale?: string;
 }
 
+/**
+ * Renders a snippet against the live document (reads the selection only
+ * when the snippet needs it). Split from the insertion so a caller that
+ * must know what text actually landed — e.g. a recorder — can.
+ */
+export async function renderSnippetForHost(
+  host: MacroHost,
+  snippet: Pick<Snippet, 'text'>,
+  options: ExpandOptions = {},
+): Promise<string> {
+  const selectionText = usesSelection(snippet.text)
+    ? (await host.getSelection({ includeText: true })).text
+    : undefined;
+
+  return renderSnippet(snippet.text, {
+    variables: options.variables,
+    selectionText,
+    now: options.now,
+    locale: options.locale,
+  });
+}
+
 /** Expands a snippet at the caret. */
 export async function expandSnippet(
   host: MacroHost,
   snippet: Pick<Snippet, 'text'>,
   options: ExpandOptions = {},
 ): Promise<MacroOutcome> {
-  // The selection is read only when needed: extracting its text has an engine cost.
-  const selectionText = usesSelection(snippet.text)
-    ? (await host.getSelection({ includeText: true })).text
-    : undefined;
-
-  const rendered = renderSnippet(snippet.text, {
-    variables: options.variables,
-    selectionText,
-    now: options.now,
-    locale: options.locale,
-  });
-
-  return host.insertText(rendered);
+  return host.insertText(await renderSnippetForHost(host, snippet, options));
 }

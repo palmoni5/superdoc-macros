@@ -3,7 +3,7 @@
  * is bounded and one bad item rejects the whole document.
  */
 import { describe, expect, it } from 'vitest';
-import { IMPORT_LIMITS, parsePersistedState, emptyState } from '../src/storage.js';
+import { IMPORT_LIMITS, parsePersistedState, emptyState, serializePersistable } from '../src/storage.js';
 
 function stateWith(overrides: Record<string, unknown>): string {
   return JSON.stringify({ ...emptyState(), ...overrides });
@@ -75,5 +75,37 @@ describe('parsePersistedState', () => {
       stateWith({ snippets: [validSnippet, { id: 'bad' }] }),
     );
     expect(parsed).toBeNull();
+  });
+
+  it('rejects an oversized or unserializable command payload', () => {
+    const oversized = {
+      ...validRecording,
+      steps: [{ type: 'command', id: 'bold', payload: { value: 'x'.repeat(IMPORT_LIMITS.maxPayloadLength + 1) } }],
+    };
+    expect(parsePersistedState(stateWith({ recordings: [oversized] }))).toBeNull();
+
+    const bounded = {
+      ...validRecording,
+      steps: [{ type: 'command', id: 'bold', payload: { value: 12 } }],
+    };
+    expect(parsePersistedState(stateWith({ recordings: [bounded] }))).not.toBeNull();
+  });
+});
+
+describe('serializePersistable', () => {
+  it('applies the whole-file cap the loader applies — save and load agree', () => {
+    const state = emptyState();
+    expect(serializePersistable(state)).toBe(JSON.stringify(state));
+
+    // A state whose serialization exceeds the loader's file cap is refused.
+    const big = {
+      ...emptyState(),
+      snippets: Array.from({ length: 100 }, (_v, i) => ({
+        id: `s${i}`,
+        name: `n${i}`,
+        text: 'x'.repeat(60_000),
+      })),
+    };
+    expect(serializePersistable(big)).toBeNull();
   });
 });
