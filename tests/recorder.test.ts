@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+﻿import { describe, expect, it } from 'vitest';
 import { MacroRecorder, replayMacro } from '../src/recorder/recorder.js';
 import { createFakeHost } from './fake-host.js';
 
@@ -14,7 +14,7 @@ describe('MacroRecorder', () => {
     await host.typeText('\nשלום');
     await host.typeBackspace();
     await host.typeBackspace();
-    const steps = recorder.stop();
+    const { steps } = recorder.stop();
 
     expect(steps).toEqual([
       { type: 'command', id: 'bold' },
@@ -34,7 +34,7 @@ describe('MacroRecorder', () => {
     await host.typeText('אב');
     host.typeCaretMove(0);
     await host.typeText('גד');
-    const steps = recorder.stop();
+    const { steps } = recorder.stop();
 
     // Text typed at a new position is not a continuation of the old text.
     expect(steps).toEqual([
@@ -50,7 +50,7 @@ describe('MacroRecorder', () => {
     recorder.start();
     await host.uiCommand('undo');
     await host.uiCommand('italic');
-    const steps = recorder.stop();
+    const { steps } = recorder.stop();
 
     expect(steps).toEqual([{ type: 'command', id: 'italic' }]);
   });
@@ -71,7 +71,7 @@ describe('MacroRecorder', () => {
 
     // The steps survive the auto-stop — losing a recording at its cap would
     // punish exactly the longest recordings.
-    const steps = recorder.stop();
+    const { steps } = recorder.stop();
     expect(steps).toHaveLength(3);
   });
 
@@ -83,7 +83,7 @@ describe('MacroRecorder', () => {
     await host.typeText('לפני בסד ');
     recorder.applyAutoTextExpansion('בסד '.length, 'בס"ד ');
 
-    expect(recorder.stop()).toEqual([{ type: 'insert-text', text: 'לפני בס"ד ' }]);
+    expect(recorder.stop().steps).toEqual([{ type: 'insert-text', text: 'לפני בס"ד ' }]);
   });
 
   it('applyAutoTextExpansion skips when the tail is not plain typed text', async () => {
@@ -97,7 +97,7 @@ describe('MacroRecorder', () => {
     recorder.applyAutoTextExpansion('בסד '.length, 'בס"ד ');
 
     // The raw truth stays: a guessed rewrite of non-matching steps is worse.
-    expect(recorder.stop()).toEqual([
+    expect(recorder.stop().steps).toEqual([
       { type: 'insert-text', text: 'בס' },
       { type: 'command', id: 'bold' },
       { type: 'insert-text', text: 'ד ' },
@@ -114,7 +114,7 @@ describe('MacroRecorder', () => {
     await host.typeText('ב');
 
     expect(recorder.recording).toBe(false);
-    expect(recorder.stop()).toEqual([]);
+    expect(recorder.stop().steps).toEqual([]);
   });
 });
 
@@ -125,7 +125,7 @@ describe('replayMacro', () => {
     recorder.start();
     await recordedOn.uiCommand('bold');
     await recordedOn.typeText('בס"ד\n');
-    const steps = recorder.stop();
+    const { steps } = recorder.stop();
 
     const target = createFakeHost();
     const result = await replayMacro(target, steps);
@@ -142,7 +142,7 @@ describe('replayMacro', () => {
     recorder.start();
     await recordedOn.typeDeleteForward();
     await recordedOn.typeDeleteForward();
-    const steps = recorder.stop();
+    const { steps } = recorder.stop();
     expect(steps).toEqual([{ type: 'delete-forward', count: 2 }]);
 
     const target = createFakeHost();

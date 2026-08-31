@@ -132,6 +132,50 @@ describe('AutoText', () => {
     expect(host.text).toBe(' בסד');
   });
 
+  it('a host that cannot verify does not expand — fail closed on null', async () => {
+    const { host } = setup([{ trigger: 'בסד', text: 'בס"ד' }]);
+    // A host with no atomic replace and no way to read the text before the
+    // caret: a feature that deletes on its own initiative gets no benefit
+    // of the doubt.
+    delete (host as { replaceTextBefore?: unknown }).replaceTextBefore;
+    host.getTextBefore = async () => null;
+
+    await host.typeText('בסד ');
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(host.text).toBe('בסד ');
+  });
+
+  it('two-step fallback restores the trigger when the insertion fails', async () => {
+    const errors: string[] = [];
+    const host = createFakeHost();
+    const autoText = new AutoText(
+      host,
+      () => [{ id: 's', name: 'בסד', text: 'בס"ד', trigger: 'בסד' }],
+      { onError: (message) => errors.push(message) },
+    );
+    autoText.attach();
+    delete (host as { replaceTextBefore?: unknown }).replaceTextBefore;
+
+    await host.typeText('בסד ');
+    // The deletion will succeed and the very next insertion will fail —
+    // the window the two-operation flow must not leave the user in.
+    const originalInsert = host.insertText.bind(host);
+    let failNext = true;
+    host.insertText = async (text) => {
+      if (failNext) {
+        failNext = false;
+        return { ok: false, message: 'boom' };
+      }
+      return originalInsert(text);
+    };
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    // The trigger is back — not silently eaten — and the failure surfaced.
+    expect(host.text).toBe('בסד ');
+    expect(errors).toEqual(['boom']);
+  });
+
   it('detach stops expansion', async () => {
     const { host, autoText } = setup([{ trigger: 'בסד', text: 'בס"ד' }]);
     autoText.detach();

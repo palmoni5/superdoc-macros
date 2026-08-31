@@ -430,6 +430,27 @@ export function createSuperdocHost(options: SuperdocHostOptions): SuperdocMacroH
       return (await readSelectionDetailed(options?.includeText ?? false)).snapshot;
     },
 
+    async replaceTextBefore(expected, replacement): Promise<MacroOutcome> {
+      // Auto-text's atomic path: verify and replace inside one ProseMirror
+      // transaction — no window in which the trigger is deleted but the
+      // replacement not yet in.
+      const pm = view();
+      if (!pm) return failed(macroMessages().deletionUnavailable, 'view-unavailable');
+      try {
+        const { from } = pm.state.selection;
+        const start = from - expected.length;
+        if (start < 0 || pm.state.doc.textBetween(start, from) !== expected) {
+          return failed(macroMessages().actionFailed, 'text-mismatch');
+        }
+        const tr = pm.state.tr;
+        tr.insertText(replacement, start, from);
+        pm.dispatch(tr);
+        return { ok: true };
+      } catch (error) {
+        return failed(error instanceof Error ? error.message : macroMessages().actionFailed, 'threw');
+      }
+    },
+
     async getTextBefore(count): Promise<string | null> {
       // Auto-text's verification before it deletes: the answer must reflect
       // the live document, so `null` (unknown) is the only honest reply when

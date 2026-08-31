@@ -131,28 +131,47 @@ export class AutoText {
       // character is already in before it is deleted along with the trigger.
       await new Promise<void>((resolve) => setTimeout(resolve, 0));
 
-      // Second line of defense, independent of the event stream: the
-      // document itself must hold the trigger right before the caret. A
-      // caret move the host failed to report (or a race with another
-      // writer) is caught here instead of deleting foreign text.
+      // Fail closed, in both directions: the document must *verifiably*
+      // hold the trigger right before the caret. A mismatch means the caret
+      // moved (or another writer raced us); `null`/`undefined` means the
+      // host cannot tell — and a feature that deletes text on its own
+      // initiative does not get the benefit of the doubt. Auto-text simply
+      // does not expand where it cannot verify.
       const expected = trigger + expandChar;
+      const rendered =
+        renderSnippet(snippet.text, {
+          selectionText: usesSelection(snippet.text)
+            ? (await this.host.getSelection({ includeText: true })).text
+            : undefined,
+        });
+      const replacement = rendered + expandChar;
+
+      // Preferred path: one atomic engine transaction that verifies and
+      // replaces together — nothing to roll back.
+      if (this.host.replaceTextBefore) {
+        const replaced = await this.host.replaceTextBefore(expected, replacement);
+        if (!replaced.ok) {
+          this.onError?.(replaced.message);
+          return;
+        }
+        this.onExpand?.(snippet, { trigger, expandChar, rendered });
+        return;
+      }
+
       const actual = await this.host.getTextBefore?.(expected.length);
-      if (typeof actual === 'string' && actual !== expected) return;
+      if (actual !== expected) return;
 
-      const selectionText = usesSelection(snippet.text)
-        ? (await this.host.getSelection({ includeText: true })).text
-        : undefined;
-      const rendered = renderSnippet(snippet.text, { selectionText });
-
-      // The expansion character is already in the document by now, so it is
-      // included in the deletion and restored at the end.
-      const deleted = await this.host.deleteBackward(trigger.length + 1);
+      // Two-operation fallback for hosts without an atomic replace. If the
+      // insertion fails after the deletion succeeded, the trigger is put
+      // back — the user must not be left with their word silently eaten.
+      const deleted = await this.host.deleteBackward(expected.length);
       if (!deleted.ok) {
         this.onError?.(deleted.message);
         return;
       }
-      const inserted = await this.host.insertText(rendered + expandChar);
+      const inserted = await this.host.insertText(replacement);
       if (!inserted.ok) {
+        await this.host.insertText(expected);
         this.onError?.(inserted.message);
         return;
       }

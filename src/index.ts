@@ -25,7 +25,14 @@ export { createEvalRunner } from './scripting/eval-runner.js';
 export { createIframeRunner, SANDBOX_BOOTSTRAP, isProtocolMessage } from './scripting/iframe-runner.js';
 export type { MacroRunner, MacroRunOptions, MacroRunResult } from './scripting/runner.js';
 
-export { MacroRecorder, replayMacro, type RecorderOptions, type ReplayOptions, type ReplayResult } from './recorder/recorder.js';
+export {
+  MacroRecorder,
+  replayMacro,
+  type RecorderOptions,
+  type RecordingWarning,
+  type ReplayOptions,
+  type ReplayResult,
+} from './recorder/recorder.js';
 
 export {
   renderSnippet,

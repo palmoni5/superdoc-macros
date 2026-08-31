@@ -48,6 +48,7 @@ export interface MacroMessages {
   fieldTooLong: (field: string, max: number) => string;
   saveFailed: string;
   recordingTooLarge: string;
+  recordingIncomplete: (commandIds: string) => string;
 
   /* Shortcut validation */
   shortcutInvalid: string;
@@ -94,6 +95,8 @@ export const ENGLISH_MESSAGES: MacroMessages = {
   fieldTooLong: (field, max) => `${field} is too long (limit: ${max} characters)`,
   saveFailed: 'Saving failed — the change was not applied',
   recordingTooLarge: 'The recording is too large to save',
+  recordingIncomplete: (commandIds) =>
+    `The recording is missing actions that cannot be recorded (${commandIds})`,
 
   shortcutInvalid: 'Invalid shortcut — use a form like Ctrl+Alt+M',
   shortcutNeedsModifier: 'A shortcut must include Ctrl, Alt or Meta',
@@ -139,6 +142,8 @@ export const HEBREW_MESSAGES: MacroMessages = {
   fieldTooLong: (field, max) => `${field} ארוך מדי (התקרה: ${max} תווים)`,
   saveFailed: 'השמירה נכשלה — השינוי לא הוחל',
   recordingTooLarge: 'ההקלטה גדולה מכדי להישמר',
+  recordingIncomplete: (commandIds) =>
+    `בהקלטה חסרות פעולות שאינן ניתנות להקלטה (${commandIds})`,
 
   shortcutInvalid: 'קיצור לא תקין — הצורה הנדרשת היא למשל Ctrl+Alt+M',
   shortcutNeedsModifier: 'קיצור חייב לכלול Ctrl,‏ Alt או Meta',

@@ -106,7 +106,20 @@ export class MacroKit {
       runner === 'iframe' ? createIframeRunner() : runner === 'eval' ? createEvalRunner() : runner;
 
     this.scriptsEnabled = options.scriptsEnabled ?? true;
+
+    const reserved = new Set<string>();
+    for (const shortcut of options.reservedShortcuts ?? []) {
+      const parsed = parseShortcut(shortcut);
+      if (parsed) for (const signature of shortcutSignatures(parsed)) reserved.add(signature);
+    }
+    this.reservedSignatures = reserved;
+
     this.state = this.storage.load() ?? emptyState();
+    // Loaded state passed the *structural* validation only. The semantic
+    // shortcut rules (bindable key, reserved list, duplicates) may have
+    // tightened since it was saved — a stale binding must not stay armed.
+    // Offending shortcuts are stripped, their items kept.
+    this.sanitizeLoadedShortcuts();
     this.recorder = new MacroRecorder(this.host, { onAutoStop: options.onRecordingAutoStop });
     this.autoText = new AutoText(this.host, () => this.state.snippets, {
       ...options.autoText,
@@ -121,13 +134,6 @@ export class MacroKit {
         options.autoText?.onExpand?.(snippet, expansion);
       },
     });
-
-    const reserved = new Set<string>();
-    for (const shortcut of options.reservedShortcuts ?? []) {
-      const parsed = parseShortcut(shortcut);
-      if (parsed) for (const signature of shortcutSignatures(parsed)) reserved.add(signature);
-    }
-    this.reservedSignatures = reserved;
   }
 
   /* ---------- Shortcut validation ---------- */
@@ -143,21 +149,57 @@ export class MacroKit {
     const trimmed = shortcut?.trim();
     if (!trimmed) return { ok: true };
 
-    const parsed = parseShortcut(trimmed);
-    if (!parsed) return { ok: false, message: macroMessages().shortcutInvalid };
-    if (!hasBindingModifier(parsed)) return { ok: false, message: macroMessages().shortcutNeedsModifier };
-    // Only keys with a physical-code mapping (letters, digits, F-keys):
-    // matching is by event.code, so it survives a Hebrew keyboard layout.
-    if (!isBindableKey(parsed)) return { ok: false, message: macroMessages().shortcutInvalid };
+    const issue = this.bindingIssue(trimmed);
+    if (issue) return { ok: false, message: issue.message };
 
-    const signatures = shortcutSignatures(parsed);
-    if (signatures.some((signature) => this.reservedSignatures.has(signature))) {
-      return { ok: false, message: macroMessages().shortcutReserved };
-    }
-
-    const owner = this.findShortcutOwner(signatures, excludeId);
+    const owner = this.findShortcutOwner(shortcutSignatures(parseShortcut(trimmed)!), excludeId);
     if (owner) return { ok: false, message: macroMessages().shortcutTaken(owner) };
     return { ok: true };
+  }
+
+  /**
+   * The context-free binding rules, in one place: parseable, real modifier,
+   * physically-mappable key, not host-reserved. Manual save, import and
+   * legacy-state load all judge a shortcut by exactly this — a file or an
+   * old store must not smuggle in what typing cannot.
+   */
+  private bindingIssue(shortcut: string): { message: string } | null {
+    const parsed = parseShortcut(shortcut);
+    if (!parsed) return { message: macroMessages().shortcutInvalid };
+    if (!hasBindingModifier(parsed)) return { message: macroMessages().shortcutNeedsModifier };
+    // Only keys with a physical-code mapping (letters, digits, F-keys):
+    // matching is by event.code, so it survives a Hebrew keyboard layout.
+    if (!isBindableKey(parsed)) return { message: macroMessages().shortcutInvalid };
+    if (shortcutSignatures(parsed).some((signature) => this.reservedSignatures.has(signature))) {
+      return { message: macroMessages().shortcutReserved };
+    }
+    return null;
+  }
+
+  /**
+   * Strips loaded shortcuts that today's rules reject — see the constructor.
+   * Items survive; only their bindings are dropped.
+   */
+  private sanitizeLoadedShortcuts(): void {
+    const seen = new Set<string>();
+    const items: Array<{ shortcut?: string }> = [
+      ...this.state.scripts,
+      ...this.state.recordings,
+      ...this.state.snippets,
+    ];
+    for (const item of items) {
+      if (!item.shortcut) continue;
+      if (this.bindingIssue(item.shortcut)) {
+        delete item.shortcut;
+        continue;
+      }
+      const signatures = shortcutSignatures(parseShortcut(item.shortcut)!);
+      if (signatures.some((signature) => seen.has(signature))) {
+        delete item.shortcut;
+        continue;
+      }
+      for (const signature of signatures) seen.add(signature);
+    }
   }
 
   private findShortcutOwner(signatures: readonly string[], excludeId?: string): string | null {
@@ -252,17 +294,38 @@ export class MacroKit {
 
   /**
    * Stops and saves. `null` when no step was recorded — there is nothing to
-   * save. Throws when the recording cannot be saved *whole* (its splittable
-   * steps still exceed the loader's step cap): a silently partial macro
-   * would replay something other than what the user did.
+   * save.
+   *
+   * Throws — with the stopped recording **retained for retry** (call again;
+   * `cancelRecording` is the explicit way to drop it) — when:
+   * - `recording-incomplete`: some actions could not be captured (e.g. an
+   *   inserted image, whose payload is the whole file). Saving that as-is
+   *   would present a macro that replays less than what the user did, so it
+   *   needs an explicit `allowIncomplete: true` from a confirming UI.
+   * - `recording-too-large`: even split, the steps exceed the loader's cap —
+   *   a silently partial macro is not produced.
+   * - a persistence failure (quota, oversized state).
    */
-  stopRecording(name: string, shortcut?: string): RecordedMacro | null {
+  stopRecording(
+    name: string,
+    shortcut?: string,
+    options: { allowIncomplete?: boolean } = {},
+  ): RecordedMacro | null {
     this.requireValidShortcut(shortcut);
     this.requireItemLimits({ name, shortcut });
     this.requireRoom(this.state.recordings);
-    const { steps, truncated } = splitOversizedSteps(this.recorder.stop());
+
+    const pending = this.recorder.stop();
+    const { steps, truncated } = splitOversizedSteps(pending.steps);
     if (truncated) throw new MacroError(macroMessages().recordingTooLarge, 'recording-too-large');
-    if (steps.length === 0) return null;
+    if (steps.length === 0) {
+      this.recorder.discard();
+      return null;
+    }
+    if (pending.warnings.length > 0 && !options.allowIncomplete) {
+      const commandIds = [...new Set(pending.warnings.map((warning) => warning.commandId))].join(', ');
+      throw new MacroError(macroMessages().recordingIncomplete(commandIds), 'recording-incomplete');
+    }
 
     const recording: RecordedMacro = {
       version: 1,
@@ -272,14 +335,23 @@ export class MacroKit {
       ...(shortcut ? { shortcut } : {}),
       steps,
     };
-    return this.commit((draft) => {
+    const saved = this.commit((draft) => {
       draft.recordings.push(recording);
       return recording;
     });
+    // Only after the commit landed: a failed save keeps the recording
+    // retrievable for another attempt (delete an old macro, stop again).
+    this.recorder.discard();
+    return saved;
   }
 
   cancelRecording(): void {
     this.recorder.cancel();
+  }
+
+  /** Whether a stopped recording awaits a retried save (see stopRecording). */
+  get hasPendingRecording(): boolean {
+    return this.recorder.hasPending;
   }
 
   listRecordings(): readonly RecordedMacro[] {
@@ -488,18 +560,15 @@ export class MacroKit {
     for (const item of items) {
       if (!item.shortcut) continue;
 
-      const parsed = parseShortcut(item.shortcut);
-      if (!parsed) {
-        return { ok: false, message: macroMessages().importRejectedShortcut(item.name, macroMessages().shortcutInvalid) };
-      }
-      if (!hasBindingModifier(parsed)) {
-        return { ok: false, message: macroMessages().importRejectedShortcut(item.name, macroMessages().shortcutNeedsModifier) };
+      // The exact same context-free rules the manual save path applies —
+      // including the bindable-key restriction (an imported Ctrl+Tab must
+      // not slip in through the event.key fallback).
+      const issue = this.bindingIssue(item.shortcut);
+      if (issue) {
+        return { ok: false, message: macroMessages().importRejectedShortcut(item.name, issue.message) };
       }
 
-      for (const signature of shortcutSignatures(parsed)) {
-        if (this.reservedSignatures.has(signature)) {
-          return { ok: false, message: macroMessages().importRejectedShortcut(item.name, macroMessages().shortcutReserved) };
-        }
+      for (const signature of shortcutSignatures(parseShortcut(item.shortcut)!)) {
         const owner = seen.get(signature);
         if (owner !== undefined) {
           return { ok: false, message: macroMessages().importRejectedShortcut(item.name, macroMessages().shortcutTaken(owner)) };

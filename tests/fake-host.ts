@@ -113,6 +113,16 @@ export function createFakeHost(knownCommands: readonly string[] = DEFAULT_COMMAN
       return host.text.slice(Math.max(0, host.cursor - count), host.cursor);
     },
 
+    async replaceTextBefore(expected, replacement): Promise<MacroOutcome> {
+      const start = host.cursor - expected.length;
+      if (start < 0 || host.text.slice(start, host.cursor) !== expected) {
+        return { ok: false, message: 'text mismatch', reason: 'text-mismatch' };
+      }
+      host.text = host.text.slice(0, start) + replacement + host.text.slice(host.cursor);
+      host.cursor = start + replacement.length;
+      return { ok: true };
+    },
+
     onCommand(listener) {
       commandListeners.add(listener);
       return () => commandListeners.delete(listener);

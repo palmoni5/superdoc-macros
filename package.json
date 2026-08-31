@@ -1,6 +1,6 @@
 {
   "name": "superdoc-macros",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "description": "Macro toolkit for SuperDoc-based editors: sandboxed scripted macros, a Word-style macro recorder, and snippets with auto-text expansion.",
   "license": "MIT",
   "type": "module",

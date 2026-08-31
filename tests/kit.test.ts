@@ -247,6 +247,21 @@ describe('MacroKit — atomic import validation', () => {
     expect(kit.listSnippets()).toHaveLength(1);
   });
 
+  it('rejects unmappable keys the manual path rejects — Ctrl+Tab, Alt+Enter', () => {
+    const { kit } = createKit();
+    for (const shortcut of ['Ctrl+Tab', 'Alt+Enter']) {
+      const file = JSON.stringify({
+        version: 1,
+        scripts: [],
+        recordings: [],
+        snippets: [{ id: 'n1', name: 'עוקף', text: 'y', shortcut }],
+      });
+      const outcome = kit.importState(file, { merge: true });
+      expect(outcome.ok, shortcut).toBe(false);
+    }
+    expect(kit.listSnippets()).toHaveLength(0);
+  });
+
   it('rejects a reserved or internally-duplicated shortcut in the merged result', () => {
     const kit = new MacroKit({
       host: createFakeHost(),
@@ -315,18 +330,78 @@ describe('MacroKit — transactional persistence', () => {
     expect(kit.validateShortcut('Ctrl+Alt+F5').ok).toBe(true);
   });
 
-  it('a command with an unserializable or oversized payload is not recorded', async () => {
+  it('an uncapturable payload makes the recording incomplete — saved only with explicit consent', async () => {
     const { kit, host } = createKit();
 
     kit.startRecording();
     const cyclic: Record<string, unknown> = {};
     cyclic.self = cyclic;
     await host.uiCommand('bold', cyclic);
-    await host.uiCommand('font-size', { value: 'x'.repeat(20_000) });
+    await host.uiCommand('font-size', { value: 'x'.repeat(20_000) }); // an image insert looks like this
     await host.uiCommand('italic', { value: 12 });
-    const recording = kit.stopRecording('פקודות');
 
+    // No silent omission: the save refuses and names the missing commands.
+    let thrown: unknown;
+    try {
+      kit.stopRecording('פקודות');
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).toBeInstanceOf(Error);
+    expect((thrown as Error).message).toContain('bold');
+    expect((thrown as Error).message).toContain('font-size');
+
+    // The recording survived the refusal — explicit consent saves it.
+    const recording = kit.stopRecording('פקודות', undefined, { allowIncomplete: true });
     expect(recording!.steps).toEqual([{ type: 'command', id: 'italic', payload: { value: 12 } }]);
+  });
+});
+
+describe('MacroKit — a failed save keeps the recording', () => {
+  it('quota failure at stopRecording: the recording survives and a retry saves it', async () => {
+    const host = createFakeHost();
+    let accept = true;
+    const kit = new MacroKit({ host, runner: 'eval', storage: { load: () => null, save: () => accept } });
+
+    kit.startRecording();
+    await host.typeText('שלום');
+    accept = false; // quota exceeded at the exact wrong moment
+
+    expect(() => kit.stopRecording('חשוב')).toThrow();
+    // Not lost: the stopped recording waits for another attempt.
+    expect(kit.hasPendingRecording).toBe(true);
+    expect(kit.listRecordings()).toHaveLength(0);
+
+    accept = true; // the user freed space
+    const saved = kit.stopRecording('חשוב');
+    expect(saved!.steps).toEqual([{ type: 'insert-text', text: 'שלום' }]);
+    expect(kit.hasPendingRecording).toBe(false);
+  });
+});
+
+describe('MacroKit — loaded-state shortcut sanitization', () => {
+  it('strips stale shortcuts that today’s rules reject, keeps the items', () => {
+    const stored = {
+      version: 1 as const,
+      scripts: [],
+      recordings: [],
+      snippets: [
+        { id: 's1', name: 'לא-ממופה', text: 'x', shortcut: 'Ctrl+Tab' },
+        { id: 's2', name: 'שמור-מערכת', text: 'x', shortcut: 'Ctrl+S' },
+        { id: 's3', name: 'ראשון', text: 'x', shortcut: 'Ctrl+Alt+4' },
+        { id: 's4', name: 'כפול', text: 'x', shortcut: 'Ctrl+Alt+4' },
+      ],
+    };
+    const kit = new MacroKit({
+      host: createFakeHost(),
+      runner: 'eval',
+      reservedShortcuts: ['Ctrl+S'],
+      storage: { load: () => JSON.parse(JSON.stringify(stored)), save: () => true },
+    });
+
+    const shortcuts = kit.listSnippets().map((snippet) => snippet.shortcut);
+    expect(shortcuts).toEqual([undefined, undefined, 'Ctrl+Alt+4', undefined]);
+    expect(kit.listSnippets()).toHaveLength(4); // the items themselves survive
   });
 });
 

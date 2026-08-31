@@ -15,6 +15,16 @@
 import { IMPORT_LIMITS } from '../storage.js';
 import type { MacroHost, MacroOutcome, MacroStep, TextInputEvent } from '../types.js';
 
+/**
+ * A user action the recorder could not capture faithfully. Surfaced, never
+ * swallowed: a macro that "saved successfully" but silently misses an image
+ * the user watched go in is a lie told at replay time.
+ */
+export interface RecordingWarning {
+  commandId: string;
+  reason: 'payload-too-large' | 'payload-not-serializable';
+}
+
 export interface RecorderOptions {
   /** Command filter. The default records everything except undo/redo. */
   shouldRecordCommand?: (id: string) => boolean;
@@ -43,6 +53,15 @@ export class MacroRecorder {
   private readonly onAutoStop?: () => void;
 
   private steps: MacroStep[] = [];
+  private warnings: RecordingWarning[] = [];
+  /**
+   * A stopped recording, held until `discard()`: the owner may fail to save
+   * it (storage quota, an incomplete recording awaiting confirmation) and
+   * must be able to come back for it. Clearing on stop() was the old
+   * behavior, and it lost recordings at exactly the moments they were
+   * hardest to redo.
+   */
+  private pending: { steps: MacroStep[]; warnings: RecordingWarning[] } | null = null;
   private disposers: Array<() => void> = [];
   private active = false;
   /**
@@ -67,10 +86,18 @@ export class MacroRecorder {
     return this.steps.length;
   }
 
+  /** Whether a stopped recording is waiting to be saved or discarded. */
+  get hasPending(): boolean {
+    return this.pending !== null;
+  }
+
   start(): void {
     if (this.active) return;
     this.active = true;
     this.steps = [];
+    this.warnings = [];
+    // Starting anew is the explicit "I no longer want the unsaved one".
+    this.pending = null;
     this.disposers = [
       this.host.onCommand((id, payload) => this.recordCommand(id, payload)),
       this.host.onTextInput((event) => this.recordTextInput(event)),
@@ -78,21 +105,32 @@ export class MacroRecorder {
   }
 
   /**
-   * Stops and returns the steps. Empty when nothing was recorded. Also the
-   * way to collect a recording that auto-stopped at the cap — the steps are
-   * kept until someone asks for them.
+   * Stops and returns the recording — steps plus any warnings about actions
+   * that could not be captured. The result stays retrievable (calling
+   * `stop()` again returns the same recording) until `discard()`, `cancel()`
+   * or a new `start()`: a save that fails must be retryable.
    */
-  stop(): MacroStep[] {
-    this.teardown();
-    const recorded = this.steps;
-    this.steps = [];
-    return recorded;
+  stop(): { steps: MacroStep[]; warnings: RecordingWarning[] } {
+    if (this.active) this.teardown();
+    if (!this.pending && (this.steps.length > 0 || this.warnings.length > 0)) {
+      this.pending = { steps: this.steps, warnings: this.warnings };
+      this.steps = [];
+      this.warnings = [];
+    }
+    return this.pending ?? { steps: [], warnings: [] };
   }
 
-  /** Stops and discards whatever was recorded. */
+  /** Releases a stopped recording after it was successfully saved (or knowingly dropped). */
+  discard(): void {
+    this.pending = null;
+  }
+
+  /** Stops and discards whatever was recorded — including a pending stopped recording. */
   cancel(): void {
     this.teardown();
     this.steps = [];
+    this.warnings = [];
+    this.pending = null;
   }
 
   /**
@@ -172,15 +210,26 @@ export class MacroRecorder {
     // The payload is opaque engine data, but not unlimited: it must survive
     // a JSON round-trip within the persistence cap, or the recording would
     // be rejected by the loader. A command whose payload cannot be kept
-    // faithfully is skipped whole — replaying it with a mangled payload
-    // would do something other than what was recorded.
+    // faithfully is not stepped — replaying it with a mangled payload would
+    // do something other than what was recorded — but it is never dropped
+    // *silently*: the warning is what lets the owner refuse to present the
+    // recording as complete. Inserting an image is the concrete case — its
+    // payload carries the whole file as a data URL.
     let json: string | undefined;
     try {
       json = JSON.stringify(payload);
     } catch {
+      this.warnings.push({ commandId: id, reason: 'payload-not-serializable' });
       return;
     }
-    if (typeof json !== 'string' || json.length > IMPORT_LIMITS.maxPayloadLength) return;
+    if (typeof json !== 'string') {
+      this.warnings.push({ commandId: id, reason: 'payload-not-serializable' });
+      return;
+    }
+    if (json.length > IMPORT_LIMITS.maxPayloadLength) {
+      this.warnings.push({ commandId: id, reason: 'payload-too-large' });
+      return;
+    }
     this.push({ type: 'command', id, payload: JSON.parse(json) });
   }
 

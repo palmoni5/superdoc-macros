@@ -67,6 +67,13 @@ export interface MacroHost {
    * caret move the host failed to report.
    */
   getTextBefore?(count: number): Promise<string | null>;
+  /**
+   * Atomically replaces the `expected.length` characters before the caret
+   * with `replacement` — verifying they equal `expected` first, all inside
+   * one engine transaction. Auto-text prefers this over delete+insert: two
+   * operations leave the trigger deleted when the second fails.
+   */
+  replaceTextBefore?(expected: string, replacement: string): Promise<MacroOutcome>;
   /** Replaces every occurrence of `query` with `replacement`. Returns how many were replaced. */
   replaceAll(
     query: string,

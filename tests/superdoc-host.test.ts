@@ -184,6 +184,43 @@ describe('createSuperdocHost', () => {
     expect(engine.log.filter((entry) => entry.startsWith('insert:'))).toEqual([]);
   });
 
+  it('replaceTextBefore verifies and replaces in one transaction', async () => {
+    const log: string[] = [];
+    let text = 'שלום בסד ';
+    const engine: SuperdocLike = {
+      activeEditor: {
+        view: {
+          state: {
+            doc: {
+              content: { size: text.length },
+              textBetween: (from: number, to: number) => text.slice(from, to),
+            },
+            selection: { from: text.length, empty: true },
+            tr: {
+              delete: () => undefined,
+              insertText: (value: string, from?: number, to?: number) => {
+                text = text.slice(0, from) + value + text.slice(to);
+                log.push(`replace:${from}-${to}`);
+              },
+              scrollIntoView: () => undefined,
+            },
+          },
+          dispatch: () => log.push('dispatch'),
+        },
+      },
+    };
+    const host = createSuperdocHost({ superdoc: engine });
+
+    const mismatch = await host.replaceTextBefore!('אחר ', 'x');
+    expect(mismatch.ok).toBe(false);
+    expect(log).toEqual([]);
+
+    const replaced = await host.replaceTextBefore!('בסד ', 'בס"ד ');
+    expect(replaced.ok).toBe(true);
+    expect(text).toBe('שלום בס"ד ');
+    expect(log).toEqual(['replace:5-9', 'dispatch']);
+  });
+
   it('viewFallback: false fails the view-backed operations closed', async () => {
     const engine = createFakeSuperdoc();
     const host = createSuperdocHost({ superdoc: engine, viewFallback: false });

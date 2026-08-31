@@ -27,6 +27,8 @@ export interface KeyEventLike {
   repeat?: boolean;
   /** Mid-IME-composition — keys belong to the composition, not to bindings. */
   isComposing?: boolean;
+  /** Legacy IME marker: some WebViews report keyCode 229 without isComposing. */
+  keyCode?: number;
   preventDefault?(): void;
   stopPropagation?(): void;
 }
@@ -163,8 +165,9 @@ export interface ShortcutTarget {
 export function bindShortcuts(target: ShortcutTarget, getBindings: () => readonly ShortcutBinding[]): () => void {
   const listener = (event: KeyboardEvent): void => {
     // Auto-repeat must not replay a macro per repeat tick, and keys mid-IME
-    // composition belong to the composition.
-    if (event.repeat || event.isComposing) return;
+    // composition belong to the composition — including the legacy keyCode
+    // 229 marker some WebViews report without setting isComposing.
+    if (event.repeat || event.isComposing || event.keyCode === 229) return;
     for (const binding of getBindings()) {
       const parsed = parseShortcut(binding.shortcut);
       if (!parsed || !eventMatches(parsed, event)) continue;
