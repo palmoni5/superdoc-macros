@@ -87,7 +87,9 @@ If you must waive isolation (e.g. a CSP that blocks `srcdoc`), switch to the dir
 ## 2. Macro recorder
 
 ```ts
-kit.startRecording();
+if (!kit.startRecording()) {
+  throw new Error('A macro is running or an unsaved recording is pending');
+}
 // the user works normally: typing, formatting, lists...
 const recording = kit.stopRecording('Standard intro', 'Ctrl+Alt+1');
 
@@ -96,6 +98,8 @@ await kit.replayRecording(recording.id);
 ```
 
 The recorder captures **commands and typing**, not caret positions — exactly like Word's recorder: replay applies wherever the caret stands. Consecutive keystrokes coalesce into one step, `undo`/`redo` are not recorded (configurable via `RecorderOptions`), and recordings persist as clean JSON that can be exported and shared. `updateRecording({id, name?, shortcut?})` renames a recording or edits its shortcut.
+
+Finalization is loss-aware. A command payload that cannot be stored faithfully is reported instead of silently omitted; `stopRecording()` keeps the stopped capture pending until it is saved or explicitly cancelled. A mixed capture requires `{ allowIncomplete: true }` after the host has obtained user consent, while a capture containing no replayable step is rejected as `recording-uncapturable`. Storage, capacity, and validation failures are retryable: fix the problem and call `stopRecording()` again. Starting a new recording while one is pending is rejected, preventing accidental loss.
 
 ## 3. Snippets and auto-text
 
