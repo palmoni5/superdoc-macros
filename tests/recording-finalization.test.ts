@@ -128,6 +128,33 @@ describe('MacroKit — safe recording finalization', () => {
     expect(kit.hasPendingRecording).toBe(false);
   });
 
+  it('promotes an auto-stopped capture to pending before notifying the host', async () => {
+    const host = createFakeHost();
+    let autoStops = 0;
+    const kit = new MacroKit({
+      host,
+      storage: createMemoryStorage(),
+      runner: 'eval',
+      onRecordingAutoStop: () => {
+        autoStops += 1;
+      },
+    });
+
+    expect(kit.startRecording()).toBe(true);
+    for (let index = 0; index < 5_000; index += 1) {
+      await host.uiCommand('bold');
+    }
+
+    expect(autoStops).toBe(1);
+    expect(kit.isRecording).toBe(false);
+    expect(kit.hasPendingRecording).toBe(true);
+    expect(kit.startRecording()).toBe(false);
+
+    const saved = kit.stopRecording('auto rescued');
+    expect(saved?.steps).toHaveLength(5_000);
+    expect(kit.hasPendingRecording).toBe(false);
+  });
+
   it('retains the capture when metadata validation fails, then accepts a corrected retry', async () => {
     const host = createFakeHost();
     const kit = new MacroKit({ host, storage: createMemoryStorage(), runner: 'eval' });

@@ -199,6 +199,9 @@ export class MacroRecorder {
     if (!this.active) return;
     if (this.steps.length + this.warnings.length < this.maxSteps) return;
     this.teardown();
+    this.pending = { steps: this.steps, warnings: this.warnings };
+    this.steps = [];
+    this.warnings = [];
     this.onAutoStop?.();
   }
 
