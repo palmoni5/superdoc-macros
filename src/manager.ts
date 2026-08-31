@@ -287,9 +287,14 @@ export class MacroKit {
     return this.recorder.stepCount;
   }
 
-  startRecording(): void {
-    if (this.running) return;
+  /**
+   * Starts a fresh recording. Returns false instead of overwriting an active
+   * or stopped-but-unsaved capture, or while another macro is running.
+   */
+  startRecording(): boolean {
+    if (this.running || this.recorder.recording || this.recorder.hasPending) return false;
     this.recorder.start();
+    return this.recorder.recording;
   }
 
   /**
@@ -298,6 +303,8 @@ export class MacroKit {
    *
    * Throws — with the stopped recording **retained for retry** (call again;
    * `cancelRecording` is the explicit way to drop it) — when:
+   * - `recording-uncapturable`: every action was uncapturable, so even an
+   *   explicitly incomplete save would create an empty macro.
    * - `recording-incomplete`: some actions could not be captured (e.g. an
    *   inserted image, whose payload is the whole file). Saving that as-is
    *   would present a macro that replays less than what the user did, so it
@@ -311,19 +318,32 @@ export class MacroKit {
     shortcut?: string,
     options: { allowIncomplete?: boolean } = {},
   ): RecordedMacro | null {
-    this.requireValidShortcut(shortcut);
-    this.requireItemLimits({ name, shortcut });
-    this.requireRoom(this.state.recordings);
-
+    // Stop first. Every failure below must leave the recorder inactive and
+    // its snapshot retryable. Checking capacity before stop() used to leave a
+    // manual recording active behind a stopped UI, and could lose an
+    // auto-stopped recording on the next start.
     const pending = this.recorder.stop();
     const { steps, truncated } = splitOversizedSteps(pending.steps);
     if (truncated) throw new MacroError(macroMessages().recordingTooLarge, 'recording-too-large');
+
+    const commandIds = [...new Set(pending.warnings.map((warning) => warning.commandId))].join(', ');
+    if (pending.warnings.length > 0 && steps.length === 0) {
+      const messages = macroMessages();
+      throw new MacroError(
+        messages.recordingUncapturable?.(commandIds) ?? messages.recordingIncomplete(commandIds),
+        'recording-uncapturable',
+      );
+    }
     if (steps.length === 0) {
       this.recorder.discard();
       return null;
     }
+
+    this.requireValidShortcut(shortcut);
+    this.requireItemLimits({ name, shortcut });
+    this.requireRoom(this.state.recordings);
+
     if (pending.warnings.length > 0 && !options.allowIncomplete) {
-      const commandIds = [...new Set(pending.warnings.map((warning) => warning.commandId))].join(', ');
       throw new MacroError(macroMessages().recordingIncomplete(commandIds), 'recording-incomplete');
     }
 

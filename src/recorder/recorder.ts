@@ -182,12 +182,24 @@ export class MacroRecorder {
 
   private push(step: MacroStep): void {
     this.steps.push(step);
-    if (this.steps.length >= this.maxSteps) {
-      // The cap stops the *listening*, not the data: the steps stay for
-      // stop() to collect, and the owner is told the recording ended.
-      this.teardown();
-      this.onAutoStop?.();
-    }
+    this.maybeAutoStop();
+  }
+
+  private addWarning(warning: RecordingWarning): void {
+    this.warnings.push(warning);
+    this.maybeAutoStop();
+  }
+
+  /**
+   * Warnings are part of the stopped snapshot just like steps. Counting both
+   * prevents a warning-only recording from growing without bound while never
+   * reaching the ordinary step cap.
+   */
+  private maybeAutoStop(): void {
+    if (!this.active) return;
+    if (this.steps.length + this.warnings.length < this.maxSteps) return;
+    this.teardown();
+    this.onAutoStop?.();
   }
 
   /**
@@ -219,15 +231,15 @@ export class MacroRecorder {
     try {
       json = JSON.stringify(payload);
     } catch {
-      this.warnings.push({ commandId: id, reason: 'payload-not-serializable' });
+      this.addWarning({ commandId: id, reason: 'payload-not-serializable' });
       return;
     }
     if (typeof json !== 'string') {
-      this.warnings.push({ commandId: id, reason: 'payload-not-serializable' });
+      this.addWarning({ commandId: id, reason: 'payload-not-serializable' });
       return;
     }
     if (json.length > IMPORT_LIMITS.maxPayloadLength) {
-      this.warnings.push({ commandId: id, reason: 'payload-too-large' });
+      this.addWarning({ commandId: id, reason: 'payload-too-large' });
       return;
     }
     this.push({ type: 'command', id, payload: JSON.parse(json) });

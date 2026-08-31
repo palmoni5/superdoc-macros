@@ -49,6 +49,12 @@ export interface MacroMessages {
   saveFailed: string;
   recordingTooLarge: string;
   recordingIncomplete: (commandIds: string) => string;
+  /**
+   * No usable step was captured; saving with allowIncomplete would create an
+   * empty macro. Optional for source compatibility with existing full locale
+   * objects compiled against 0.7.0.
+   */
+  recordingUncapturable?: (commandIds: string) => string;
 
   /* Shortcut validation */
   shortcutInvalid: string;
@@ -97,6 +103,8 @@ export const ENGLISH_MESSAGES: MacroMessages = {
   recordingTooLarge: 'The recording is too large to save',
   recordingIncomplete: (commandIds) =>
     `The recording is missing actions that cannot be recorded (${commandIds})`,
+  recordingUncapturable: (commandIds) =>
+    `The recording contains only actions that cannot be recorded (${commandIds})`,
 
   shortcutInvalid: 'Invalid shortcut — use a form like Ctrl+Alt+M',
   shortcutNeedsModifier: 'A shortcut must include Ctrl, Alt or Meta',
@@ -144,6 +152,8 @@ export const HEBREW_MESSAGES: MacroMessages = {
   recordingTooLarge: 'ההקלטה גדולה מכדי להישמר',
   recordingIncomplete: (commandIds) =>
     `בהקלטה חסרות פעולות שאינן ניתנות להקלטה (${commandIds})`,
+  recordingUncapturable: (commandIds) =>
+    `ההקלטה מכילה רק פעולות שאינן ניתנות להקלטה (${commandIds})`,
 
   shortcutInvalid: 'קיצור לא תקין — הצורה הנדרשת היא למשל Ctrl+Alt+M',
   shortcutNeedsModifier: 'קיצור חייב לכלול Ctrl,‏ Alt או Meta',
