@@ -1,7 +1,7 @@
 {
   "name": "superdoc-macros",
-  "version": "0.7.1",
-  "description": "Macro toolkit for SuperDoc-based editors: sandboxed scripted macros, a Word-style macro recorder, and snippets with auto-text expansion.",
+  "version": "0.8.0",
+  "description": "Macro toolkit for SuperDoc-based editors: sandboxed scripted macros, a Word-style macro recorder, snippets with auto-text expansion, and read-only VBA import from .docm files.",
   "license": "MIT",
   "type": "module",
   "main": "./dist/index.js",
@@ -34,6 +34,8 @@
     "snippets",
     "autotext",
     "docx",
+    "docm",
+    "vba",
     "editor",
     "otzaria"
   ],
