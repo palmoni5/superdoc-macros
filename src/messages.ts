@@ -56,6 +56,13 @@ export interface MacroMessages {
    */
   recordingUncapturable?: (commandIds: string) => string;
 
+  /**
+   * Built-in tools. Optional for source compatibility with full locale
+   * objects compiled against 0.8.0 (same reasoning as recordingUncapturable).
+   */
+  toolNotFound?: string;
+  toolAlreadyRegistered?: (id: string) => string;
+
   /* Shortcut validation */
   shortcutInvalid: string;
   shortcutNeedsModifier: string;
@@ -106,6 +113,9 @@ export const ENGLISH_MESSAGES: MacroMessages = {
   recordingUncapturable: (commandIds) =>
     `The recording contains only actions that cannot be recorded (${commandIds})`,
 
+  toolNotFound: 'Tool not found',
+  toolAlreadyRegistered: (id) => `A tool with the id "${id}" is already registered`,
+
   shortcutInvalid: 'Invalid shortcut — use a form like Ctrl+Alt+M',
   shortcutNeedsModifier: 'A shortcut must include Ctrl, Alt or Meta',
   shortcutReserved: 'This shortcut is reserved by the editor',
@@ -154,6 +164,9 @@ export const HEBREW_MESSAGES: MacroMessages = {
     `בהקלטה חסרות פעולות שאינן ניתנות להקלטה (${commandIds})`,
   recordingUncapturable: (commandIds) =>
     `ההקלטה מכילה רק פעולות שאינן ניתנות להקלטה (${commandIds})`,
+
+  toolNotFound: 'הכלי לא נמצא',
+  toolAlreadyRegistered: (id) => `כלי עם המזהה "${id}" כבר רשום`,
 
   shortcutInvalid: 'קיצור לא תקין — הצורה הנדרשת היא למשל Ctrl+Alt+M',
   shortcutNeedsModifier: 'קיצור חייב לכלול Ctrl,‏ Alt או Meta',

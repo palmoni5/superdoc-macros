@@ -106,6 +106,33 @@ export interface RecordedMacro {
   steps: MacroStep[];
 }
 
+/**
+ * A built-in tool the host registers on the kit: a native document-processing
+ * action (implemented by the host against its own engine access) that the kit
+ * exposes alongside recordings and scripts — listable in a management UI,
+ * runnable under the same one-run-at-a-time guard, and bindable to a
+ * persisted keyboard shortcut. Tools are runtime registrations, never
+ * persisted themselves; only their shortcuts are.
+ */
+export interface BuiltinTool {
+  /** Stable identifier, e.g. `'shulchan.first-word'`. Shortcut persistence is keyed by it. */
+  id: string;
+  /** Display name. */
+  name: string;
+  /** One-line description for management UIs. */
+  description?: string;
+  /** Runs the tool. A thrown error is reported as a failed outcome. */
+  run(): Promise<MacroOutcome> | MacroOutcome;
+}
+
+/** A registered tool as listed to UIs — the registration plus its persisted shortcut. */
+export interface BuiltinToolInfo {
+  id: string;
+  name: string;
+  description?: string;
+  shortcut?: string;
+}
+
 /** A written macro — a JavaScript script that runs against the toolkit's API. */
 export interface SavedScript {
   id: string;

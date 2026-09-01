@@ -27,7 +27,16 @@ import {
 import { MacroError } from './scripting/macro-api.js';
 import { createLocalStorage, emptyState, parsePersistedState, type MacroStorage, type PersistedMacroState } from './storage.js';
 import { macroMessages } from './messages.js';
-import type { MacroHost, MacroStep, RecordedMacro, SavedScript, Snippet } from './types.js';
+import type {
+  BuiltinTool,
+  BuiltinToolInfo,
+  MacroHost,
+  MacroOutcome,
+  MacroStep,
+  RecordedMacro,
+  SavedScript,
+  Snippet,
+} from './types.js';
 
 export interface MacroKitOptions {
   host: MacroHost;
@@ -89,6 +98,8 @@ export class MacroKit {
   private readonly onLog?: MacroApiOptions['onLog'];
 
   private state: PersistedMacroState;
+  /** Built-in tools, by id. Runtime registrations — never persisted (see BuiltinTool). */
+  private readonly tools = new Map<string, BuiltinTool>();
   private readonly recorder: MacroRecorder;
   private readonly autoText: AutoText;
   private readonly reservedSignatures: ReadonlySet<string>;
@@ -200,6 +211,20 @@ export class MacroKit {
       }
       for (const signature of signatures) seen.add(signature);
     }
+    const toolShortcuts = this.state.toolShortcuts;
+    if (!toolShortcuts) return;
+    for (const [toolId, shortcut] of Object.entries(toolShortcuts)) {
+      if (this.bindingIssue(shortcut)) {
+        delete toolShortcuts[toolId];
+        continue;
+      }
+      const signatures = shortcutSignatures(parseShortcut(shortcut)!);
+      if (signatures.some((signature) => seen.has(signature))) {
+        delete toolShortcuts[toolId];
+        continue;
+      }
+      for (const signature of signatures) seen.add(signature);
+    }
   }
 
   private findShortcutOwner(signatures: readonly string[], excludeId?: string): string | null {
@@ -214,6 +239,17 @@ export class MacroKit {
       if (!parsed) continue;
       const existing = shortcutSignatures(parsed);
       if (existing.some((signature) => signatures.includes(signature))) return item.name;
+    }
+    for (const [toolId, shortcut] of Object.entries(this.state.toolShortcuts ?? {})) {
+      if (toolId === excludeId) continue;
+      const parsed = parseShortcut(shortcut);
+      if (!parsed) continue;
+      const existing = shortcutSignatures(parsed);
+      if (existing.some((signature) => signatures.includes(signature))) {
+        // A stored shortcut can belong to a tool that is not registered in
+        // this session; its id is then the only name there is.
+        return this.tools.get(toolId)?.name ?? toolId;
+      }
     }
     return null;
   }
@@ -482,6 +518,84 @@ export class MacroKit {
     this.autoText.detach();
   }
 
+  /* ---------- Built-in tools ---------- */
+
+  /**
+   * Registers a built-in tool (see BuiltinTool in types.ts). Throws on a
+   * duplicate id or an invalid name — a silent replace would let two host
+   * modules fight over one id without anyone noticing.
+   */
+  registerTool(tool: BuiltinTool): void {
+    if (!tool.id || tool.id.length > IMPORT_LIMITS.maxNameLength) {
+      throw new MacroError(macroMessages().fieldTooLong('id', IMPORT_LIMITS.maxNameLength), 'invalid-item');
+    }
+    this.requireItemLimits({ name: tool.name });
+    if (this.tools.has(tool.id)) {
+      const messages = macroMessages();
+      throw new MacroError(
+        messages.toolAlreadyRegistered?.(tool.id) ?? messages.saveFailed,
+        'invalid-item',
+      );
+    }
+    this.tools.set(tool.id, tool);
+  }
+
+  /** The registered tools, each with its persisted shortcut (if any). */
+  listTools(): readonly BuiltinToolInfo[] {
+    return [...this.tools.values()].map((tool) => ({
+      id: tool.id,
+      name: tool.name,
+      ...(tool.description ? { description: tool.description } : {}),
+      ...(this.state.toolShortcuts?.[tool.id] ? { shortcut: this.state.toolShortcuts[tool.id] } : {}),
+    }));
+  }
+
+  /**
+   * Runs a registered tool under the same guard as scripts and replays: not
+   * while recording, and never two runs at once. A thrown error is reported
+   * as a failed outcome, never rethrown.
+   */
+  async runTool(id: string): Promise<MacroOutcome> {
+    const tool = this.tools.get(id);
+    if (!tool) {
+      const messages = macroMessages();
+      return { ok: false, message: messages.toolNotFound ?? messages.actionFailed, reason: 'tool-not-found' };
+    }
+    const guard = this.guardRun();
+    if (guard) return { ok: false, message: guard.message };
+
+    this.running = true;
+    try {
+      return await tool.run();
+    } catch (error) {
+      return { ok: false, message: error instanceof Error ? error.message : macroMessages().actionFailed, reason: 'threw' };
+    } finally {
+      this.running = false;
+    }
+  }
+
+  /**
+   * Sets or clears (undefined/empty) the persisted shortcut of a registered
+   * tool, under the exact validation of every other saved binding.
+   */
+  setToolShortcut(id: string, shortcut: string | undefined): void {
+    if (!this.tools.has(id)) {
+      const messages = macroMessages();
+      throw new MacroError(messages.toolNotFound ?? messages.actionFailed, 'tool-not-found');
+    }
+    const trimmed = shortcut?.trim();
+    if (trimmed) {
+      this.requireValidShortcut(trimmed, id);
+      this.requireItemLimits({ name: this.tools.get(id)!.name, shortcut: trimmed });
+    }
+    this.commit((draft) => {
+      const map = draft.toolShortcuts ?? {};
+      if (trimmed) map[id] = trimmed;
+      else delete map[id];
+      draft.toolShortcuts = map;
+    });
+  }
+
   /* ---------- Keyboard shortcuts ---------- */
 
   /**
@@ -509,6 +623,11 @@ export class MacroKit {
     }
     for (const snippet of this.state.snippets) {
       if (snippet.shortcut) bindings.push({ shortcut: snippet.shortcut, run: () => this.expandSnippet(snippet.id) });
+    }
+    for (const [toolId, shortcut] of Object.entries(this.state.toolShortcuts ?? {})) {
+      // Only registered tools bind: a stored shortcut of a tool the host did
+      // not register this session must not swallow the key.
+      if (this.tools.has(toolId)) bindings.push({ shortcut, run: () => this.runTool(toolId) });
     }
     return bindings;
   }
@@ -541,6 +660,9 @@ export class MacroKit {
         scripts: [...this.state.scripts.map((item) => ({ ...item }))],
         recordings: [...this.state.recordings.map((item) => ({ ...item }))],
         snippets: [...this.state.snippets.map((item) => ({ ...item }))],
+        ...(this.state.toolShortcuts || imported.toolShortcuts
+          ? { toolShortcuts: { ...this.state.toolShortcuts, ...imported.toolShortcuts } }
+          : {}),
       };
       for (const script of imported.scripts) this.upsert(candidate.scripts, script);
       for (const recording of imported.recordings) this.upsert(candidate.recordings, recording);
@@ -575,6 +697,10 @@ export class MacroKit {
       ...candidate.scripts,
       ...candidate.recordings,
       ...candidate.snippets,
+      ...Object.entries(candidate.toolShortcuts ?? {}).map(([toolId, shortcut]) => ({
+        name: this.tools.get(toolId)?.name ?? toolId,
+        shortcut,
+      })),
     ];
 
     for (const item of items) {

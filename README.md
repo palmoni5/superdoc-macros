@@ -2,7 +2,7 @@
 
 A macro toolkit for **SuperDoc v2**-based editors. Originally built for [otzaria-word-editor](https://github.com/Y-PLONI/otzaria-word-editor), but fully generic: it has no dependency on that project — nor on the superdoc package itself (the engine is consumed structurally, through its public surfaces), and the core works against any editor that implements a small `MacroHost` interface.
 
-Three capabilities, in the spirit of Word macros:
+The capabilities, in the spirit of Word macros:
 
 | Capability | What it gives you |
 | --- | --- |
@@ -10,10 +10,11 @@ Three capabilities, in the spirit of Word macros:
 | **Macro recorder** | "Record → work normally → stop → replay" — records commands and typing, like Word's recorder |
 | **Snippets (AutoText)** | Templates with variables (`{{date}}`, `{{selection}}`…), keyboard shortcuts, and auto-expansion while typing (type a trigger word + space) |
 | **VBA import (read-only)** | Reads the macros already inside a `.docm` and shows the user their real source, so they can port it. Nothing is executed |
+| **Built-in tools** | Host-implemented document actions registered on the kit — listed, run and shortcut-bound alongside everything else |
 
 Plus: persistence (localStorage or custom storage), JSON import/export, keyboard shortcut binding, and localizable runtime messages (English by default, Hebrew locale included).
 
-> **A note on VBA:** the toolkit does not *execute* VBA — there is no VBA engine in the browser, and running document-supplied code is not something it will grow into. What it does instead is two things: it lets a user **see** the macros a `.docm` already contains (section 4), and it provides a parallel, JavaScript-based macro system to rewrite them in.
+> **A note on VBA:** the toolkit does not *execute* VBA — there is no VBA engine in the browser, and running document-supplied code is not something it will grow into. What it does instead is two things: it lets a user **see** the macros a `.docm` already contains (section 5), and it provides a parallel, JavaScript-based macro system to rewrite them in.
 
 ## Installation
 
@@ -119,7 +120,26 @@ await kit.expandSnippet(id);   // or expand explicitly / via the shortcut
 
 Built-in variables: `{{date}}`, `{{time}}`, `{{datetime}}` (formatted with the browser locale, or an explicit `locale` option), `{{selection}}`. Any other name resolves from the `variables` passed to `expandSnippet`; a variable with no value stays visible in the text.
 
-## 4. Reading the VBA in an existing `.docm`
+## 4. Built-in tools
+
+A host often ships native document-processing actions of its own — implemented against its full engine access, beyond what the sandboxed script API exposes. Registering them on the kit puts them next to recordings and scripts: one management UI, one run-at-a-time guard, and one shortcut system with persistence and collision rules.
+
+```ts
+kit.registerTool({
+  id: 'typography.first-word',
+  name: 'Format first word',
+  description: 'Enlarges the first word of every selected paragraph',
+  run: () => applyFirstWordDesign(editor),   // host code, returns { ok } / { ok: false, message }
+});
+
+kit.listTools();                              // [{ id, name, description, shortcut? }]
+await kit.runTool('typography.first-word');   // refused while recording or while another macro runs
+kit.setToolShortcut('typography.first-word', 'Ctrl+Alt+1');  // persisted; validated like every binding
+```
+
+Tools are runtime registrations — they are never persisted or exported. Only their shortcuts are, keyed by the tool id, so a shortcut survives restarts and waits for the day its tool is registered again; an unregistered tool's shortcut is never bound.
+
+## 5. Reading the VBA in an existing `.docm`
 
 A user who has relied on a macro-enabled document for years should not be told their macros are simply gone. This reads the macro project out of the package and hands back each module's real source text:
 

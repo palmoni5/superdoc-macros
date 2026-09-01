@@ -1,4 +1,6 @@
 export type {
+  BuiltinTool,
+  BuiltinToolInfo,
   MacroHost,
   MacroOutcome,
   MacroStep,

@@ -10,6 +10,12 @@ export interface PersistedMacroState {
   scripts: SavedScript[];
   recordings: RecordedMacro[];
   snippets: Snippet[];
+  /**
+   * Keyboard shortcuts of built-in tools, keyed by tool id. Optional for
+   * backward compatibility: stores written before tools existed lack it,
+   * and they must keep loading as-is.
+   */
+  toolShortcuts?: Record<string, string>;
 }
 
 export interface MacroStorage {
@@ -124,11 +130,25 @@ function isValidSnippet(value: unknown): value is Snippet {
   );
 }
 
+/** Tool-shortcut map: bounded ids to bounded shortcut strings, capped like the item lists. */
+function isValidToolShortcuts(value: unknown): boolean {
+  if (value === undefined) return true;
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
+  const entries = Object.entries(value as Record<string, unknown>);
+  if (entries.length > IMPORT_LIMITS.maxItems) return false;
+  return entries.every(
+    ([id, shortcut]) =>
+      boundedString(id, IMPORT_LIMITS.maxNameLength) &&
+      boundedString(shortcut, IMPORT_LIMITS.maxShortcutLength),
+  );
+}
+
 function isValidState(value: unknown): value is PersistedMacroState {
   if (typeof value !== 'object' || value === null) return false;
   const state = value as Record<string, unknown>;
   return (
     state.version === 1 &&
+    isValidToolShortcuts(state.toolShortcuts) &&
     Array.isArray(state.scripts) &&
     state.scripts.length <= IMPORT_LIMITS.maxItems &&
     state.scripts.every(isValidScript) &&
